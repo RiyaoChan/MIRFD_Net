@@ -28,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--resume", default=None, help="Resume from a checkpoint saved by this script.")
+    parser.add_argument("--no-amp", action="store_true", help="Disable mixed precision for stability checks.")
     return parser.parse_args()
 
 
@@ -173,6 +174,8 @@ def main() -> None:
         cfg.setdefault("data", {})["root"] = args.data_root
     if args.epochs is not None:
         cfg.setdefault("train", {})["epochs"] = args.epochs
+    if args.no_amp:
+        cfg.setdefault("train", {})["amp"] = False
 
     set_seed(cfg.get("seed", 42))
     out_dir = ensure_dir(args.output_dir)
