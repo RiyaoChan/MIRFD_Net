@@ -2,6 +2,8 @@
 
 PyTorch implementation of Mamba-Induced Residual Frequency Decoupling for infrared small target segmentation.
 
+Experiment logs, current best results, feature-frequency diagnostics, and model-level failure analysis are recorded in [EXPERIMENT_RESULTS_AND_ANALYSIS.md](EXPERIMENT_RESULTS_AND_ANALYSIS.md).
+
 The core idea is to use the Mamba-style 2D propagation output as an adaptive low-frequency semantic approximation, then recover target-sensitive high-frequency details with the input-output residual:
 
 ```text
