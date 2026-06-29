@@ -1,0 +1,84 @@
+seed: 42
+
+data:
+  root: /DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST
+  image_dir: images
+  mask_dir: masks
+  train_split_file: 50_50/train.txt
+  val_split_file: 50_50/test.txt
+  test_split_file: 50_50/test.txt
+  resize: null
+  val_resize: [256, 256]
+  test_resize: [256, 256]
+  crop_size: [256, 256]
+  positive_crop_prob: 0.5
+  normalize:
+    mean: 107.80905151367188
+    std: 33.02274703979492
+  augment: true
+  augmentation_mode: sctransnet
+  num_workers: 4
+
+model:
+  in_channels: 1
+  num_classes: 1
+  base_dim: 32
+  depths: [1, 1, 2, 2]
+  norm: batch
+  use_aux_heads: true
+
+  mamba:
+    variant: ss2d
+    scan_backend: cuda
+    expansion: 2.0
+    conv_kernel: 3
+    dropout: 0.0
+    d_state: 16
+    dt_rank: auto
+    dt_min: 0.001
+    dt_max: 0.1
+    dt_init: random
+    dt_scale: 1.0
+    dt_init_floor: 0.0001
+    bias: false
+    conv_bias: true
+
+  mirfd:
+    residual_type: mamba_residual
+    use_gate: true
+    use_learnable_gamma: false
+    fusion: concat
+    hfe_kernels: [3, 5]
+    pre_norm: layer
+
+  decoder:
+    use_high_residual_skip: true
+
+loss:
+  bce_weight: 1.0
+  dice_weight: 1.0
+  aux_weight: 0.2
+  spectral_low_weight: 0.01
+  spectral_high_weight: 0.01
+  spectral_low_radius_ratio: 0.25
+
+metrics:
+  threshold: 0.5
+  pd_fa_mode: centroid
+  pd_fa_distance: 3.0
+
+train:
+  optimizer: AdamW
+  lr: 0.001
+  eta_min: 0.00001
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 0.00000001
+  epochs: 500
+  batch_size: 32
+  eval_batch_size: 32
+  amp: true
+  scheduler: cosine_warmup
+  scheduler_step: iter
+  warmup_epochs: 10
+  clip_grad_norm: 1.0
