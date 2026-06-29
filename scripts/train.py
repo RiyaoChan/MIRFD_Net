@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="runs/mirfd")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--resume", default=None, help="Resume from a checkpoint saved by this script.")
     return parser.parse_args()
 
 
@@ -114,6 +115,40 @@ def build_scheduler(
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda), step_unit
 
 
+def load_resume_state(
+    resume_path: str | Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    device: torch.device,
+) -> int:
+    checkpoint = torch.load(resume_path, map_location=device)
+    state = checkpoint.get("model", checkpoint)
+    model.load_state_dict(state, strict=True)
+    if isinstance(checkpoint, dict) and checkpoint.get("optimizer") is not None:
+        optimizer.load_state_dict(checkpoint["optimizer"])
+    if (
+        isinstance(checkpoint, dict)
+        and scheduler is not None
+        and checkpoint.get("scheduler") is not None
+    ):
+        scheduler.load_state_dict(checkpoint["scheduler"])
+    return int(checkpoint.get("epoch", 0)) + 1 if isinstance(checkpoint, dict) else 1
+
+
+def checkpoint_metric(path: Path, metric: str, default: float) -> float:
+    if not path.exists():
+        return default
+    try:
+        checkpoint = torch.load(path, map_location="cpu")
+    except Exception:
+        return default
+    metrics = checkpoint.get("metrics", {}) if isinstance(checkpoint, dict) else {}
+    if metric == "pd_fa":
+        return float(metrics.get("pd", 0.0)) - float(metrics.get("fa", 0.0))
+    return float(metrics.get(metric, default))
+
+
 @torch.no_grad()
 def evaluate(model, loader, device, need_features: bool, metrics_cfg: dict) -> dict[str, float]:
     model.eval()
@@ -169,7 +204,16 @@ def main() -> None:
     best_niou = -1.0
     best_dice = -1.0
     best_pd_fa = -float("inf")
-    for epoch in range(1, epochs + 1):
+    start_epoch = 1
+    if args.resume is not None:
+        start_epoch = load_resume_state(args.resume, model, optimizer, scheduler, device)
+        best_iou = checkpoint_metric(out_dir / "best_iou.pt", "iou", best_iou)
+        best_niou = checkpoint_metric(out_dir / "best_niou.pt", "niou", best_niou)
+        best_dice = checkpoint_metric(out_dir / "best_dice.pt", "dice", best_dice)
+        best_pd_fa = checkpoint_metric(out_dir / "best_pd_fa.pt", "pd_fa", best_pd_fa)
+        print(f"resumed from {args.resume} at epoch={start_epoch}")
+
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
         loss_meter = AverageMeter()
         progress = tqdm(train_loader, desc=f"epoch {epoch}/{epochs}")

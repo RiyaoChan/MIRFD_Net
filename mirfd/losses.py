@@ -57,6 +57,7 @@ def _spectral_ratio(
     radius_ratio: float,
     eps: float = 1e-6,
 ) -> torch.Tensor:
+    features = features.float()
     spectrum = torch.fft.fftshift(torch.fft.fft2(features, norm="ortho"), dim=(-2, -1)).abs()
     low_mask = _frequency_mask(
         features.shape[-2],
