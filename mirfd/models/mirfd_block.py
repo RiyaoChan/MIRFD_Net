@@ -7,7 +7,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from .layers import ConvNormAct, make_norm
-from .mamba2d import Mamba2D
+from .ss2d import build_mamba_block
 
 
 class HighFrequencyEnhancer(nn.Module):
@@ -66,7 +66,7 @@ class MIRFDBlock(nn.Module):
         if fusion not in self.SUPPORTED_FUSIONS:
             raise ValueError(f"Unsupported fusion: {fusion}")
 
-        mamba_block = mamba_block or Mamba2D
+        mamba_block = mamba_block or build_mamba_block
         mamba_kwargs = mamba_kwargs or {}
 
         self.residual_type = residual_type

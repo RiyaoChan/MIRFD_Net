@@ -15,12 +15,10 @@ model:
   use_aux_heads: true
 
   mamba:
-    # fallback: built-in lightweight scan
-    # ss2d: VMamba-style SS2D, requires mamba_ssm selective_scan
-    # external: import a VMamba/SS2D class by path
-    # parallel: fallback branch + ss2d/external branch
-    variant: fallback
+    variant: parallel
     scan_backend: auto
+    parallel_real_variant: ss2d
+    parallel_fusion: concat
     expansion: 2.0
     conv_kernel: 3
     dropout: 0.0
@@ -34,11 +32,6 @@ model:
     dt_init_floor: 0.0001
     bias: false
     conv_bias: true
-    external_import_path:
-    external_layout: auto
-    external_kwargs: {}
-    parallel_real_variant: ss2d
-    parallel_fusion: concat
 
   mirfd:
     residual_type: mamba_residual

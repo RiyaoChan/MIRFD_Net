@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
 import torch
 
 from mirfd.losses import MIRFDLoss
+from mirfd.metrics import segmentation_metrics
 from mirfd.models import MIRFDNet
 
 
@@ -28,6 +29,8 @@ def main() -> None:
     criterion = MIRFDLoss(aux_weight=0.2, spectral_low_weight=0.01, spectral_high_weight=0.01)
     loss, details = criterion(outputs, y)
     loss.backward()
+    metrics = segmentation_metrics(outputs["logits"], y)
+    assert "pd" in metrics and "fa" in metrics
     print("smoke ok", details)
 
 

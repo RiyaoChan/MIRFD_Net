@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from mirfd.datasets import build_dataset
 from mirfd.losses import MIRFDLoss
-from mirfd.metrics import MetricAverager, segmentation_metrics
+from mirfd.metrics import SegmentationMetricAccumulator
 from mirfd.models import build_model
 from mirfd.utils import AverageMeter, ensure_dir, load_config, save_checkpoint, set_seed
 
@@ -44,13 +44,13 @@ def make_loader(cfg: dict, split: str, batch_size: int, shuffle: bool) -> DataLo
 @torch.no_grad()
 def evaluate(model, loader, device, need_features: bool) -> dict[str, float]:
     model.eval()
-    meter = MetricAverager()
+    meter = SegmentationMetricAccumulator()
     for batch in tqdm(loader, desc="val", leave=False):
         images = batch["image"].to(device, non_blocking=True)
         masks = batch["mask"].to(device, non_blocking=True)
         outputs = model(images, return_features=need_features)
         logits = outputs["logits"] if isinstance(outputs, dict) else outputs
-        meter.update(segmentation_metrics(logits, masks), n=images.size(0))
+        meter.update(logits, masks)
     return meter.compute()
 
 

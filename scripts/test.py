@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from mirfd.datasets import build_dataset
-from mirfd.metrics import MetricAverager, segmentation_metrics
+from mirfd.metrics import SegmentationMetricAccumulator
 from mirfd.models import build_model
 from mirfd.utils import load_checkpoint, load_config
 
@@ -50,13 +50,13 @@ def main() -> None:
         pin_memory=torch.cuda.is_available(),
     )
 
-    meter = MetricAverager()
+    meter = SegmentationMetricAccumulator(threshold=args.threshold)
     with torch.no_grad():
         for batch in tqdm(loader, desc=args.split):
             images = batch["image"].to(device, non_blocking=True)
             masks = batch["mask"].to(device, non_blocking=True)
             outputs = model(images, return_dict=True)
-            meter.update(segmentation_metrics(outputs["logits"], masks, threshold=args.threshold), n=images.size(0))
+            meter.update(outputs["logits"], masks)
 
     for key, value in meter.compute().items():
         print(f"{key}: {value:.6f}")

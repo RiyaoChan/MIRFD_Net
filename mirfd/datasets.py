@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import ConcatDataset, Dataset
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
@@ -63,16 +63,36 @@ def _collect_files(directory: Path, exts: set[str]) -> list[Path]:
     return sorted([path for path in directory.rglob("*") if path.suffix.lower() in exts])
 
 
-def _resolve_named_file(directory: Path, name: str, exts: set[str]) -> Path | None:
+def _candidate_stems(name: str, suffixes: list[str] | None = None) -> list[str]:
+    stem = Path(name).stem
+    stems = [stem]
+    for suffix in suffixes or []:
+        if suffix and not stem.endswith(suffix):
+            stems.append(f"{stem}{suffix}")
+    return list(dict.fromkeys(stems))
+
+
+def _resolve_named_file(directory: Path, name: str, exts: set[str], suffixes: list[str] | None = None) -> Path | None:
     candidate = directory / name
     if candidate.is_file():
         return candidate
-    stem = Path(name).stem
-    for ext in exts:
-        candidate = directory / f"{stem}{ext}"
-        if candidate.is_file():
-            return candidate
+    for stem in _candidate_stems(name, suffixes):
+        for ext in exts:
+            candidate = directory / f"{stem}{ext}"
+            if candidate.is_file():
+                return candidate
     return None
+
+
+def _mask_lookup(mask_dir: Path, suffixes: list[str] | None = None) -> dict[str, Path]:
+    masks_by_stem = {}
+    suffixes = suffixes or []
+    for path in _collect_files(mask_dir, MASK_EXTS):
+        masks_by_stem[path.stem] = path
+        for suffix in suffixes:
+            if suffix and path.stem.endswith(suffix):
+                masks_by_stem[path.stem[: -len(suffix)]] = path
+    return masks_by_stem
 
 
 class InfraredSmallTargetDataset(Dataset):
@@ -85,6 +105,7 @@ class InfraredSmallTargetDataset(Dataset):
         image_dir: str | Path | None = None,
         mask_dir: str | Path | None = None,
         split_file: str | Path | None = None,
+        mask_suffixes: list[str] | None = None,
         resize: tuple[int, int] | int | None = None,
         augment: bool = False,
     ) -> None:
@@ -92,6 +113,7 @@ class InfraredSmallTargetDataset(Dataset):
         self.split = split
         self.resize = _as_size(resize)
         self.augment = augment
+        self.mask_suffixes = mask_suffixes or []
 
         if image_dir is None or mask_dir is None:
             self.image_dir, self.mask_dir = _find_dirs(self.root, split)
@@ -109,10 +131,13 @@ class InfraredSmallTargetDataset(Dataset):
                 split_path = self.root / split_path
             names = _read_split_file(split_path)
             images = [_resolve_named_file(self.image_dir, name, IMAGE_EXTS) for name in names]
-            masks = [_resolve_named_file(self.mask_dir, name, MASK_EXTS) for name in names]
+            masks = [
+                _resolve_named_file(self.mask_dir, name, MASK_EXTS, self.mask_suffixes)
+                for name in names
+            ]
             self.samples = [(img, mask) for img, mask in zip(images, masks) if img and mask]
         else:
-            masks_by_stem = {path.stem: path for path in _collect_files(self.mask_dir, MASK_EXTS)}
+            masks_by_stem = _mask_lookup(self.mask_dir, self.mask_suffixes)
             self.samples = []
             for image_path in _collect_files(self.image_dir, IMAGE_EXTS):
                 mask_path = masks_by_stem.get(image_path.stem)
@@ -157,16 +182,44 @@ class InfraredSmallTargetDataset(Dataset):
         }
 
 
-def build_dataset(data_cfg: dict[str, Any], split: str, augment: bool | None = None) -> InfraredSmallTargetDataset:
+def _dataset_from_cfg(data_cfg: dict[str, Any], split: str, augment: bool) -> InfraredSmallTargetDataset:
     if "root" not in data_cfg:
         raise ValueError("data.root is required")
-    augment = (split == "train") if augment is None else augment
     return InfraredSmallTargetDataset(
         root=data_cfg["root"],
         split=split,
         image_dir=data_cfg.get(f"{split}_image_dir", data_cfg.get("image_dir")),
         mask_dir=data_cfg.get(f"{split}_mask_dir", data_cfg.get("mask_dir")),
         split_file=data_cfg.get(f"{split}_split_file"),
+        mask_suffixes=data_cfg.get("mask_suffixes"),
         resize=data_cfg.get("resize"),
         augment=augment and data_cfg.get("augment", True),
     )
+
+
+def build_dataset(data_cfg: dict[str, Any], split: str, augment: bool | None = None) -> Dataset:
+    augment = (split == "train") if augment is None else augment
+    if "datasets" not in data_cfg:
+        return _dataset_from_cfg(data_cfg, split, augment)
+
+    datasets = []
+    shared_keys = {
+        key: value
+        for key, value in data_cfg.items()
+        if key not in {"datasets", "num_workers"}
+    }
+    for dataset_cfg in data_cfg["datasets"]:
+        merged = {**shared_keys, **dataset_cfg}
+        try:
+            datasets.append(_dataset_from_cfg(merged, split, augment))
+        except ValueError:
+            if split == "val" and merged.get("test_split_file"):
+                merged[f"{split}_split_file"] = merged["test_split_file"]
+                datasets.append(_dataset_from_cfg(merged, split, augment))
+            else:
+                raise
+    if not datasets:
+        raise ValueError(f"No datasets configured for split '{split}'")
+    if len(datasets) == 1:
+        return datasets[0]
+    return ConcatDataset(datasets)
