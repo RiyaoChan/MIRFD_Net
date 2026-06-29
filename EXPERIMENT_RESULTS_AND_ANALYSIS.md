@@ -335,7 +335,7 @@ SCTransNet-style 训练策略显著改善了 NUAA-SIRST 和 NUDT-SIRST，但 IRS
 
 ### 10.3 默认兼容性
 
-旧配置默认不改变行为：
+旧配置的模型结构默认仍保持 v1 行为：
 
 ```yaml
 model:
@@ -348,7 +348,7 @@ loss:
   spectral_high_target: high_raw
 ```
 
-因此旧实验 checkpoint 对应的结构语义仍然清晰；v2 实验需要显式使用新增 v2 配置。
+旧实验 checkpoint 对应的结构语义仍然清晰。需要注意的是，`MIRFDLoss` 的默认高频频谱约束目标已改为 `high_raw`；如果要严格复现实验前的 gate 后高频约束，可在旧 config 中显式设置 `loss.spectral_high_target: high` 或 `high_hat`。v2 实验建议继续使用新增 v2 配置中的 `high_raw`。
 
 ### 10.4 下一步建议实验
 

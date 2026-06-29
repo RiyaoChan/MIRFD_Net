@@ -8,7 +8,7 @@
 
 - 已实现：LowSmooth、high residual `concat_proj/add`、增强型 gate、Stage1 high skip、`spectral_high_target`、NaN 保护、多指标 checkpoint、v2 FFT 诊断、`pyramid_avgpool` residual ablation；真正 Haar wavelet high-frequency 尚未实现。
 - 已新增配置：`configs/mirfd_nuaa_sirst_ss2d_v2.yaml`、`configs/mirfd_nudt_sirst_ss2d_v2.yaml`、`configs/mirfd_irstd_1k_ss2d_v2.yaml`。
-- 默认兼容：旧配置默认仍使用 v1 行为，即 `use_low_smooth=false`、`high_residual_mode=hfe`、`gate_mode=suppress`、`use_stage1_high_skip=false`。
+- 默认兼容：旧配置的模型结构默认仍使用 v1 行为，即 `use_low_smooth=false`、`high_residual_mode=hfe`、`gate_mode=suppress`、`use_stage1_high_skip=false`；loss 的默认高频频谱目标已改为 `high_raw`，严格复现实验前约束需显式设置 `spectral_high_target: high` 或 `high_hat`。
 
 ---
 
