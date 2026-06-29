@@ -302,3 +302,62 @@ SCTransNet-style 训练策略显著改善了 NUAA-SIRST 和 NUDT-SIRST，但 IRS
 - SS2D 主要位于 1/4、1/8、1/16 特征，对极小目标细粒度响应不足。
 
 下一步应优先从模型结构改进，而不是继续只调训练超参。
+
+## 10. MIRFD-Net v2 代码实现记录
+
+根据 `MIRFD_Net_v2_improvement_plan_for_codex.md`，当前代码已完成 MIRFD-Net v2 的主体实现，并保留 v1 兼容配置。
+
+### 10.1 已采用的方案
+
+| Module | Adopted scheme | Config switch |
+|---|---|---|
+| Low branch | 对 Mamba/SS2D 输出后的 `low0` 做 `LowSmooth` 低通校准，而不是对输入特征预先手工分频 | `model.mirfd.use_low_smooth`, `model.mirfd.low_smooth_beta_init` |
+| High branch | 采用推荐方案 A：`high_raw = Conv1x1(concat(residual, HFE(residual)))`，保留 residual 直连 | `model.mirfd.high_residual_mode: concat_proj` |
+| Gate | 采用增强型 gate：`high_hat = (1 + alpha * gate) * high_raw`，避免旧式 `gate * high` 直接压制目标 | `model.mirfd.gate_mode: enhance`, `model.mirfd.gate_alpha_init` |
+| Decoder skip | decoder 使用 gate 后的 `high_hat`，保持目标相关高频增强进入解码器 | internal |
+| Stage1 high skip | 增加浅层 high skip：`e1_high = HFE(e1 - Blur(e1))`，替代原来的 `zeros_like(e1)` | `model.use_stage1_high_skip` |
+| Spectral loss | high spectral loss 可选 `residual/high_raw/high_hat`；v2 配置默认使用 `high_raw` | `loss.spectral_high_target` |
+| Training stability | 非有限 loss 直接中止；额外保存 `last_finite.pt` 和多指标 best checkpoint | `train.clip_grad_norm` / `train.grad_clip_norm` |
+| Wavelet ablation | 增加轻量 Haar-like residual 选项，用 avgpool+nearest upsample 近似低频并取残差 | `model.mirfd.residual_type: wavelet` |
+
+### 10.2 新增/修改文件
+
+| File | Change |
+|---|---|
+| `mirfd/models/mirfd_block.py` | 新增 `FixedDepthwiseBlur`、`LowSmooth`、`high_residual_mode`、`gate_mode`、`wavelet` residual，并返回 `low0/low/residual/high_raw/high_hat/gate` |
+| `mirfd/models/mirfd_net.py` | 接入 Stage1 high skip，decoder 使用 `high_hat`，feature dict 暴露 v2 诊断特征 |
+| `mirfd/losses.py` | 增加 `spectral_high_target`，支持对 `high_raw` 或 `residual` 做高频正则 |
+| `scripts/train.py` | 增加 NaN 保护、`grad_clip_norm` 别名、多指标 checkpoint |
+| `scripts/visualize_fft.py` | 可视化 `low/residual/high_raw/high_hat/gate` 及频谱 |
+| `configs/mirfd_nuaa_sirst_ss2d_v2.yaml` | NUAA v2 配置，`lr=0.001`，spectral weight 0.001 |
+| `configs/mirfd_nudt_sirst_ss2d_v2.yaml` | NUDT v2 配置，`lr=0.001`，`batch_size=32` |
+| `configs/mirfd_irstd_1k_ss2d_v2.yaml` | IRSTD v2 配置，`lr=0.0005`，`batch_size=16`，先关闭 spectral loss |
+
+### 10.3 默认兼容性
+
+旧配置默认不改变行为：
+
+```yaml
+model:
+  mirfd:
+    use_low_smooth: false
+    high_residual_mode: hfe
+    gate_mode: suppress
+  use_stage1_high_skip: false
+loss:
+  spectral_high_target: high
+```
+
+因此旧实验 checkpoint 对应的结构语义仍然清晰；v2 实验需要显式使用新增 v2 配置。
+
+### 10.4 下一步建议实验
+
+优先启动以下三组：
+
+```bash
+python scripts/train.py --config configs/mirfd_nuaa_sirst_ss2d_v2.yaml --output-dir runs/nuaa_sirst_ss2d_v2
+python scripts/train.py --config configs/mirfd_nudt_sirst_ss2d_v2.yaml --output-dir runs/nudt_sirst_ss2d_v2
+python scripts/train.py --config configs/mirfd_irstd_1k_ss2d_v2.yaml --output-dir runs/irstd_1k_ss2d_v2
+```
+
+IRSTD-1K 建议先观察前 80 epoch 是否稳定。如果稳定但 IoU 不够，再单独加 `spectral_low_weight=0.001`、`spectral_high_weight=0.001` 做对照。

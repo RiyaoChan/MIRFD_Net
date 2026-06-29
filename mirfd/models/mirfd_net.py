@@ -7,7 +7,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from .layers import ConvNormAct
-from .mirfd_block import MIRFDBlock
+from .mirfd_block import FixedDepthwiseBlur, HighFrequencyEnhancer, MIRFDBlock
 
 
 class ConvStage(nn.Module):
@@ -36,8 +36,11 @@ class MIRFDStage(nn.Module):
         if return_branches:
             if last is None:
                 last = {
+                    "low0": x,
                     "low": x,
                     "high": torch.zeros_like(x),
+                    "high_raw": torch.zeros_like(x),
+                    "high_hat": torch.zeros_like(x),
                     "residual": torch.zeros_like(x),
                     "gate": torch.ones_like(x),
                 }
@@ -100,6 +103,7 @@ class MIRFDNet(nn.Module):
         depths: tuple[int, int, int, int] = (1, 1, 2, 2),
         block_kwargs: dict[str, Any] | None = None,
         use_high_residual_skip: bool = True,
+        use_stage1_high_skip: bool = False,
         use_aux_heads: bool = True,
         norm: str = "batch",
     ) -> None:
@@ -107,9 +111,16 @@ class MIRFDNet(nn.Module):
         dims = dims or (base_dim, base_dim * 2, base_dim * 4, base_dim * 8)
         block_kwargs = block_kwargs or {}
         self.use_aux_heads = use_aux_heads
+        self.use_stage1_high_skip = use_stage1_high_skip
 
         self.stem = ConvNormAct(in_channels, dims[0], kernel_size=3, stride=2, norm=norm)
         self.stage1 = ConvStage(dims[0], depths[0], norm=norm)
+        if use_stage1_high_skip:
+            self.stage1_blur = FixedDepthwiseBlur(dims[0])
+            self.stage1_hfe = HighFrequencyEnhancer(dims[0], norm=norm)
+        else:
+            self.stage1_blur = nn.Identity()
+            self.stage1_hfe = nn.Identity()
 
         self.down12 = ConvNormAct(dims[0], dims[1], kernel_size=3, stride=2, norm=norm)
         self.stage2 = MIRFDStage(dims[1], depths[1], block_kwargs)
@@ -149,9 +160,17 @@ class MIRFDNet(nn.Module):
         e4_in = self.down34(e3)
         e4, b4 = self.stage4(e4_in, return_branches=True) if collect else (self.stage4(e4_in), None)
 
-        d3 = self.dec3(e4, e3, b3["high"] if b3 is not None else None)
-        d2 = self.dec2(d3, e2, b2["high"] if b2 is not None else None)
-        d1 = self.dec1(d2, e1, torch.zeros_like(e1))
+        d3 = self.dec3(e4, e3, b3["high_hat"] if b3 is not None else None)
+        d2 = self.dec2(d3, e2, b2["high_hat"] if b2 is not None else None)
+        if self.use_stage1_high_skip:
+            e1_low = self.stage1_blur(e1)
+            e1_residual = e1 - e1_low
+            e1_high = self.stage1_hfe(e1_residual)
+        else:
+            e1_low = e1
+            e1_residual = torch.zeros_like(e1)
+            e1_high = torch.zeros_like(e1)
+        d1 = self.dec1(d2, e1, e1_high)
         logits = self.head(d1)
         logits = F.interpolate(logits, size=input_size, mode="bilinear", align_corners=False)
 
@@ -159,14 +178,20 @@ class MIRFDNet(nn.Module):
         if self.use_aux_heads:
             output["aux_logits"] = [
                 head(feat)
-                for head, feat in zip(self.aux_heads, [b2["high"], b3["high"], b4["high"]])
+                for head, feat in zip(self.aux_heads, [b2["high_hat"], b3["high_hat"], b4["high_hat"]])
             ]
         if return_features:
             output["features"] = {
+                "low0": [b2["low0"], b3["low0"], b4["low0"]],
                 "low": [b2["low"], b3["low"], b4["low"]],
-                "high": [b2["high"], b3["high"], b4["high"]],
+                "high": [b2["high_hat"], b3["high_hat"], b4["high_hat"]],
+                "high_raw": [b2["high_raw"], b3["high_raw"], b4["high_raw"]],
+                "high_hat": [b2["high_hat"], b3["high_hat"], b4["high_hat"]],
                 "residual": [b2["residual"], b3["residual"], b4["residual"]],
                 "gate": [b2["gate"], b3["gate"], b4["gate"]],
+                "stage1_low": [e1_low],
+                "stage1_residual": [e1_residual],
+                "stage1_high": [e1_high],
             }
 
         if return_dict is None:
@@ -189,6 +214,11 @@ def build_model(config: dict[str, Any] | None = None) -> MIRFDNet:
         "hfe_kernels": tuple(mirfd_cfg.get("hfe_kernels", (3, 5))),
         "norm": model_cfg.get("norm", "batch"),
         "pre_norm": mirfd_cfg.get("pre_norm", "layer"),
+        "use_low_smooth": mirfd_cfg.get("use_low_smooth", False),
+        "low_smooth_beta_init": mirfd_cfg.get("low_smooth_beta_init", 0.3),
+        "high_residual_mode": mirfd_cfg.get("high_residual_mode", "hfe"),
+        "gate_mode": mirfd_cfg.get("gate_mode", "suppress"),
+        "gate_alpha_init": mirfd_cfg.get("gate_alpha_init", 1.0),
         "mamba_kwargs": {
             "variant": mamba_cfg.get("variant", "fallback"),
             "expansion": mamba_cfg.get("expansion", 2.0),
@@ -223,6 +253,7 @@ def build_model(config: dict[str, Any] | None = None) -> MIRFDNet:
         depths=tuple(depths),
         block_kwargs=block_kwargs,
         use_high_residual_skip=decoder_cfg.get("use_high_residual_skip", True),
+        use_stage1_high_skip=model_cfg.get("use_stage1_high_skip", decoder_cfg.get("use_stage1_high_skip", False)),
         use_aux_heads=model_cfg.get("use_aux_heads", True),
         norm=model_cfg.get("norm", "batch"),
     )

@@ -42,6 +42,11 @@ def spectrum_image(feat: torch.Tensor) -> np.ndarray:
     return cv2.applyColorMap(normalize_uint8(spec), cv2.COLORMAP_INFERNO)
 
 
+def response_image(feat: torch.Tensor) -> np.ndarray:
+    resp = feat.detach().float().abs().mean(dim=1)[0].cpu().numpy()
+    return cv2.applyColorMap(normalize_uint8(resp), cv2.COLORMAP_VIRIDIS)
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
@@ -52,11 +57,19 @@ def main() -> None:
     load_checkpoint(args.checkpoint, model, map_location=device)
     model.eval()
 
-    image = Image.open(args.image).convert("L")
-    resize = cfg.get("data", {}).get("resize")
+    data_cfg = cfg.get("data", {})
+    image = Image.open(args.image).convert("F" if data_cfg.get("normalize") is not None else "L")
+    resize = data_cfg.get("test_resize", data_cfg.get("val_resize", data_cfg.get("resize")))
     if resize is not None:
         image = image.resize((int(resize[1]), int(resize[0])), Image.BILINEAR)
-    arr = np.asarray(image, dtype=np.float32) / 255.0
+    arr = np.asarray(image, dtype=np.float32)
+    raw_arr = arr.copy()
+    if data_cfg.get("normalize") is not None:
+        mean = float(data_cfg["normalize"].get("mean", 0.0))
+        std = float(data_cfg["normalize"].get("std", 1.0))
+        arr = (arr - mean) / std
+    else:
+        arr = arr / 255.0
     tensor = torch.from_numpy(arr).unsqueeze(0).unsqueeze(0).to(device)
 
     with torch.no_grad():
@@ -64,18 +77,26 @@ def main() -> None:
     features = outputs["features"]
     stage = args.stage
     low = features["low"][stage]
-    high = features["high"][stage]
+    residual = features["residual"][stage]
+    high_raw = features.get("high_raw", features["high"])[stage]
+    high_hat = features.get("high_hat", features["high"])[stage]
     gate = features["gate"][stage].mean(dim=1)[0].detach().cpu().numpy()
 
-    low_spec = spectrum_image(low)
-    high_spec = spectrum_image(high)
-    gate_img = cv2.applyColorMap(normalize_uint8(gate), cv2.COLORMAP_VIRIDIS)
-    input_img = cv2.cvtColor(normalize_uint8(arr), cv2.COLOR_GRAY2BGR)
-    gate_img = cv2.resize(gate_img, (input_img.shape[1], input_img.shape[0]))
-    low_spec = cv2.resize(low_spec, (input_img.shape[1], input_img.shape[0]))
-    high_spec = cv2.resize(high_spec, (input_img.shape[1], input_img.shape[0]))
+    input_img = cv2.cvtColor(normalize_uint8(raw_arr), cv2.COLOR_GRAY2BGR)
+    size = (input_img.shape[1], input_img.shape[0])
+    panels = [
+        input_img,
+        cv2.resize(response_image(low), size),
+        cv2.resize(response_image(residual), size),
+        cv2.resize(response_image(high_raw), size),
+        cv2.resize(response_image(high_hat), size),
+        cv2.resize(cv2.applyColorMap(normalize_uint8(gate), cv2.COLORMAP_VIRIDIS), size),
+        cv2.resize(spectrum_image(low), size),
+        cv2.resize(spectrum_image(residual), size),
+        cv2.resize(spectrum_image(high_raw), size),
+    ]
 
-    panel = np.concatenate([input_img, low_spec, high_spec, gate_img], axis=1)
+    panel = np.concatenate(panels, axis=1)
     out_path = output_dir / f"{Path(args.image).stem}_fft_stage{stage}.png"
     cv2.imwrite(str(out_path), panel)
     print(out_path)

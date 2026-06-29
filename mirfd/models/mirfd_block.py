@@ -26,6 +26,35 @@ class HighFrequencyEnhancer(nn.Module):
         return self.fuse(torch.cat([branch(x) for branch in self.branches], dim=1))
 
 
+class FixedDepthwiseBlur(nn.Module):
+    """Fixed 3x3 binomial low-pass filter applied channel-wise."""
+
+    def __init__(self, dim: int) -> None:
+        super().__init__()
+        kernel = torch.tensor(
+            [[1.0, 2.0, 1.0], [2.0, 4.0, 2.0], [1.0, 2.0, 1.0]],
+            dtype=torch.float32,
+        ) / 16.0
+        self.register_buffer("weight", kernel.view(1, 1, 3, 3).repeat(dim, 1, 1, 1), persistent=False)
+        self.groups = dim
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.conv2d(x, self.weight.to(dtype=x.dtype), padding=1, groups=self.groups)
+
+
+class LowSmooth(nn.Module):
+    """Lightweight calibration on the Mamba-induced low representation."""
+
+    def __init__(self, dim: int, beta_init: float = 0.3) -> None:
+        super().__init__()
+        self.blur = FixedDepthwiseBlur(dim)
+        self.beta = nn.Parameter(torch.tensor(float(beta_init)))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        beta = torch.clamp(self.beta, 0.0, 1.0)
+        return x + beta * (self.blur(x) - x)
+
+
 class TargetAwareGate(nn.Module):
     def __init__(self, dim: int, norm: str = "batch") -> None:
         super().__init__()
@@ -44,8 +73,10 @@ class TargetAwareGate(nn.Module):
 class MIRFDBlock(nn.Module):
     """Mamba-induced residual frequency decoupling block."""
 
-    SUPPORTED_RESIDUALS = {"mamba_residual", "avgpool", "laplace", "sobel"}
+    SUPPORTED_RESIDUALS = {"mamba_residual", "avgpool", "laplace", "sobel", "wavelet"}
     SUPPORTED_FUSIONS = {"concat", "residual_compensation"}
+    SUPPORTED_HIGH_RESIDUAL_MODES = {"hfe", "concat_proj", "add"}
+    SUPPORTED_GATE_MODES = {"suppress", "enhance", "half_enhance"}
 
     def __init__(
         self,
@@ -59,12 +90,21 @@ class MIRFDBlock(nn.Module):
         hfe_kernels: Iterable[int] = (3, 5),
         norm: str = "batch",
         pre_norm: str = "layer",
+        use_low_smooth: bool = False,
+        low_smooth_beta_init: float = 0.3,
+        high_residual_mode: str = "hfe",
+        gate_mode: str = "suppress",
+        gate_alpha_init: float = 1.0,
     ) -> None:
         super().__init__()
         if residual_type not in self.SUPPORTED_RESIDUALS:
             raise ValueError(f"Unsupported residual_type: {residual_type}")
         if fusion not in self.SUPPORTED_FUSIONS:
             raise ValueError(f"Unsupported fusion: {fusion}")
+        if high_residual_mode not in self.SUPPORTED_HIGH_RESIDUAL_MODES:
+            raise ValueError(f"Unsupported high_residual_mode: {high_residual_mode}")
+        if gate_mode not in self.SUPPORTED_GATE_MODES:
+            raise ValueError(f"Unsupported gate_mode: {gate_mode}")
 
         mamba_block = mamba_block or build_mamba_block
         mamba_kwargs = mamba_kwargs or {}
@@ -72,14 +112,23 @@ class MIRFDBlock(nn.Module):
         self.residual_type = residual_type
         self.fusion = fusion
         self.use_gate = use_gate
+        self.high_residual_mode = high_residual_mode
+        self.gate_mode = gate_mode
         self.norm = make_norm(pre_norm, dim)
         self.mamba = mamba_block(dim, **mamba_kwargs)
         self.align = nn.Sequential(
             nn.Conv2d(dim, dim, kernel_size=1),
             make_norm(norm, dim),
         )
+        self.low_smooth = LowSmooth(dim, beta_init=low_smooth_beta_init) if use_low_smooth else nn.Identity()
         self.hfe = HighFrequencyEnhancer(dim, kernels=hfe_kernels, norm=norm)
+        self.high_proj = (
+            ConvNormAct(dim * 2, dim, kernel_size=1, padding=0, norm=norm)
+            if high_residual_mode == "concat_proj"
+            else nn.Identity()
+        )
         self.gate = TargetAwareGate(dim, norm=norm) if use_gate else None
+        self.gate_alpha = nn.Parameter(torch.tensor(float(gate_alpha_init)))
 
         if fusion == "concat":
             self.fuse = ConvNormAct(dim * 2, dim, kernel_size=1, padding=0, norm=norm)
@@ -107,34 +156,57 @@ class MIRFDBlock(nn.Module):
         weight = kernel.to(device=x.device, dtype=x.dtype).repeat(x.shape[1], 1, 1, 1)
         return F.conv2d(x, weight, padding=1, groups=x.shape[1])
 
-    def _low_and_residual(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _low_and_residual(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.residual_type == "mamba_residual":
             fm = self.mamba(self.norm(x))
-            low = self.align(fm)
+            low0 = self.align(fm)
+            low = self.low_smooth(low0)
             residual = x - low
-            return low, residual
+            return low0, low, residual
 
         if self.residual_type == "avgpool":
             low = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1, count_include_pad=False)
             residual = x - low
-            return low, residual
+            return low, low, residual
 
         if self.residual_type == "laplace":
             residual = self._depthwise_fixed(x, self.laplace_kernel)
             low = x - residual
-            return low, residual
+            return low, low, residual
 
-        grad_x = self._depthwise_fixed(x, self.sobel_x_kernel)
-        grad_y = self._depthwise_fixed(x, self.sobel_y_kernel)
-        residual = 0.5 * (grad_x.abs() + grad_y.abs())
-        low = x - residual
-        return low, residual
+        if self.residual_type == "sobel":
+            grad_x = self._depthwise_fixed(x, self.sobel_x_kernel)
+            grad_y = self._depthwise_fixed(x, self.sobel_y_kernel)
+            residual = 0.5 * (grad_x.abs() + grad_y.abs())
+            low = x - residual
+            return low, low, residual
+
+        pooled = F.avg_pool2d(x, kernel_size=2, stride=2)
+        low = F.interpolate(pooled, size=x.shape[-2:], mode="nearest")
+        residual = x - low
+        return low, low, residual
+
+    def _high_branch(self, residual: torch.Tensor) -> torch.Tensor:
+        hfe_out = self.hfe(residual)
+        if self.high_residual_mode == "concat_proj":
+            return self.high_proj(torch.cat([residual, hfe_out], dim=1))
+        if self.high_residual_mode == "add":
+            return residual + hfe_out
+        return hfe_out
+
+    def _apply_gate(self, high_raw: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        if self.gate_mode == "suppress":
+            return gate * high_raw
+        if self.gate_mode == "half_enhance":
+            return (0.5 + gate) * high_raw
+        alpha = torch.clamp(self.gate_alpha, 0.0, 2.0)
+        return (1.0 + alpha * gate) * high_raw
 
     def forward(self, x: torch.Tensor, return_branches: bool = False):
-        low, residual = self._low_and_residual(x)
-        high = self.hfe(residual)
-        gate = self.gate(low, residual) if self.gate is not None else torch.ones_like(high)
-        high_hat = gate * high
+        low0, low, residual = self._low_and_residual(x)
+        high_raw = self._high_branch(residual)
+        gate = self.gate(low, residual) if self.gate is not None else torch.ones_like(high_raw)
+        high_hat = self._apply_gate(high_raw, gate)
 
         if self.fusion == "concat":
             out = self.fuse(torch.cat([low, high_hat], dim=1)) + x
@@ -143,8 +215,11 @@ class MIRFDBlock(nn.Module):
 
         if return_branches:
             return out, {
+                "low0": low0,
                 "low": low,
                 "high": high_hat,
+                "high_raw": high_raw,
+                "high_hat": high_hat,
                 "residual": residual,
                 "gate": gate,
             }

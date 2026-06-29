@@ -99,14 +99,18 @@ class MIRFDLoss(nn.Module):
         spectral_low_weight: float = 0.0,
         spectral_high_weight: float = 0.0,
         spectral_low_radius_ratio: float = 0.25,
+        spectral_high_target: str = "high",
     ) -> None:
         super().__init__()
+        if spectral_high_target not in {"high", "high_hat", "high_raw", "residual"}:
+            raise ValueError(f"Unsupported spectral_high_target: {spectral_high_target}")
         self.bce_weight = bce_weight
         self.dice_weight = dice_weight
         self.aux_weight = aux_weight
         self.spectral_low_weight = spectral_low_weight
         self.spectral_high_weight = spectral_high_weight
         self.spectral_low_radius_ratio = spectral_low_radius_ratio
+        self.spectral_high_target = spectral_high_target
 
     def forward(self, outputs, target: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
         logits = outputs["logits"] if isinstance(outputs, dict) else outputs
@@ -125,9 +129,13 @@ class MIRFDLoss(nn.Module):
 
         need_spectral = self.spectral_low_weight > 0.0 or self.spectral_high_weight > 0.0
         if isinstance(outputs, dict) and need_spectral and "features" in outputs:
+            features = outputs["features"]
+            high_features = features.get(self.spectral_high_target)
+            if high_features is None and self.spectral_high_target == "high":
+                high_features = features.get("high_hat")
             low_reg, high_reg = spectral_regularization(
-                outputs["features"].get("low"),
-                outputs["features"].get("high"),
+                features.get("low"),
+                high_features,
                 radius_ratio=self.spectral_low_radius_ratio,
             )
             loss = loss + self.spectral_low_weight * low_reg + self.spectral_high_weight * high_reg

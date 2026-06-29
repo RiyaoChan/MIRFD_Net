@@ -14,6 +14,24 @@ G   = TargetAwareGate(F_l, R)
 Out = Fuse(F_l, G * F_h) + F
 ```
 
+## MIRFD-Net v2 switches
+
+The v2 implementation keeps SS2D/VMamba-style modeling inside the MIRFD block, not as a full VMamba backbone. It adds the following ablation switches:
+
+- `model.mirfd.use_low_smooth`: applies lightweight low-pass calibration to the Mamba-induced low representation.
+- `model.mirfd.high_residual_mode`: `hfe`, `concat_proj`, or `add`; `concat_proj` keeps the raw residual beside the HFE output.
+- `model.mirfd.gate_mode`: `suppress`, `enhance`, or `half_enhance`; `enhance` uses `(1 + alpha * gate) * high_raw`.
+- `model.use_stage1_high_skip`: adds shallow high-frequency skip information at the highest decoder resolution.
+- `loss.spectral_high_target`: chooses `residual`, `high_raw`, or `high_hat` for high-branch spectral regularization.
+
+Ready-to-run v2 configs:
+
+```text
+configs/mirfd_nuaa_sirst_ss2d_v2.yaml
+configs/mirfd_nudt_sirst_ss2d_v2.yaml
+configs/mirfd_irstd_1k_ss2d_v2.yaml
+```
+
 ## What is included
 
 - `mirfd.models.MIRFDNet`

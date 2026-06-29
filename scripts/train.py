@@ -163,14 +163,17 @@ def main() -> None:
     use_amp = bool(train_cfg.get("amp", True) and device.type == "cuda")
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     need_features = loss_cfg.get("spectral_low_weight", 0.0) > 0.0 or loss_cfg.get("spectral_high_weight", 0.0) > 0.0
-    clip_grad_norm = train_cfg.get("clip_grad_norm")
+    clip_grad_norm = train_cfg.get("clip_grad_norm", train_cfg.get("grad_clip_norm"))
 
     best_iou = -1.0
+    best_niou = -1.0
+    best_dice = -1.0
+    best_pd_fa = -float("inf")
     for epoch in range(1, epochs + 1):
         model.train()
         loss_meter = AverageMeter()
         progress = tqdm(train_loader, desc=f"epoch {epoch}/{epochs}")
-        for batch in progress:
+        for iter_idx, batch in enumerate(progress, start=1):
             images = batch["image"].to(device, non_blocking=True)
             masks = batch["mask"].to(device, non_blocking=True)
 
@@ -178,6 +181,11 @@ def main() -> None:
             with torch.cuda.amp.autocast(enabled=use_amp):
                 outputs = model(images, return_features=need_features)
                 loss, details = criterion(outputs, masks)
+            if not torch.isfinite(loss):
+                optimizer.zero_grad(set_to_none=True)
+                raise FloatingPointError(
+                    f"Non-finite loss detected at epoch={epoch}, iter={iter_idx}, loss={loss.item()}"
+                )
             scaler.scale(loss).backward()
             if clip_grad_norm is not None:
                 scaler.unscale_(optimizer)
@@ -195,8 +203,20 @@ def main() -> None:
 
         metrics = evaluate(model, val_loader, device, need_features=False, metrics_cfg=metrics_cfg) if val_loader is not None else {}
         current_iou = metrics.get("iou", -1.0)
+        current_niou = metrics.get("niou", -1.0)
+        current_dice = metrics.get("dice", -1.0)
+        current_pd_fa = metrics.get("pd", 0.0) - metrics.get("fa", 0.0)
         save_checkpoint(
             out_dir / "last.pt",
+            model,
+            epoch=epoch,
+            optimizer=optimizer.state_dict(),
+            scheduler=scheduler.state_dict() if scheduler is not None else None,
+            metrics=metrics,
+            config=cfg,
+        )
+        save_checkpoint(
+            out_dir / "last_finite.pt",
             model,
             epoch=epoch,
             optimizer=optimizer.state_dict(),
@@ -208,6 +228,48 @@ def main() -> None:
             best_iou = current_iou
             save_checkpoint(
                 out_dir / "best.pt",
+                model,
+                epoch=epoch,
+                optimizer=optimizer.state_dict(),
+                scheduler=scheduler.state_dict() if scheduler is not None else None,
+                metrics=metrics,
+                config=cfg,
+            )
+            save_checkpoint(
+                out_dir / "best_iou.pt",
+                model,
+                epoch=epoch,
+                optimizer=optimizer.state_dict(),
+                scheduler=scheduler.state_dict() if scheduler is not None else None,
+                metrics=metrics,
+                config=cfg,
+            )
+        if current_niou > best_niou:
+            best_niou = current_niou
+            save_checkpoint(
+                out_dir / "best_niou.pt",
+                model,
+                epoch=epoch,
+                optimizer=optimizer.state_dict(),
+                scheduler=scheduler.state_dict() if scheduler is not None else None,
+                metrics=metrics,
+                config=cfg,
+            )
+        if current_dice > best_dice:
+            best_dice = current_dice
+            save_checkpoint(
+                out_dir / "best_dice.pt",
+                model,
+                epoch=epoch,
+                optimizer=optimizer.state_dict(),
+                scheduler=scheduler.state_dict() if scheduler is not None else None,
+                metrics=metrics,
+                config=cfg,
+            )
+        if current_pd_fa > best_pd_fa:
+            best_pd_fa = current_pd_fa
+            save_checkpoint(
+                out_dir / "best_pd_fa.pt",
                 model,
                 epoch=epoch,
                 optimizer=optimizer.state_dict(),
