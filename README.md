@@ -4,14 +4,16 @@ PyTorch implementation of Mamba-Induced Residual Frequency Decoupling for infrar
 
 Experiment logs, current best results, feature-frequency diagnostics, and model-level failure analysis are recorded in [EXPERIMENT_RESULTS_AND_ANALYSIS.md](EXPERIMENT_RESULTS_AND_ANALYSIS.md).
 
-The core idea is to use the Mamba-style 2D propagation output as an adaptive low-frequency semantic approximation, then recover target-sensitive high-frequency details with the input-output residual:
+The core idea is to use the Mamba-style 2D propagation output as an adaptive low-frequency semantic approximation, then recover target-sensitive high-frequency details with the input-output residual. In the v2 block, the Mamba-induced low representation is lightly calibrated, the raw residual is kept in the high branch, and the gate acts as an enhancer:
 
 ```text
-F_l = Align(Mamba2D(Norm(F)))
-R   = F - F_l
-F_h = HighFrequencyEnhancer(R)
-G   = TargetAwareGate(F_l, R)
-Out = Fuse(F_l, G * F_h) + F
+low0     = Align(SS2D(Norm(F)))
+low      = LowSmooth(low0)
+R        = F - low
+high_raw = Proj(concat(R, HighFrequencyEnhancer(R)))
+G        = TargetAwareGate(low, R)
+high_hat = (1 + alpha * G) * high_raw
+Out      = Fuse(low, high_hat) + F
 ```
 
 ## MIRFD-Net v2 switches

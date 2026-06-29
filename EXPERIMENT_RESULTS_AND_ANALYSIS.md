@@ -318,13 +318,13 @@ SCTransNet-style 训练策略显著改善了 NUAA-SIRST 和 NUDT-SIRST，但 IRS
 | Stage1 high skip | 增加浅层 high skip：`e1_high = HFE(e1 - Blur(e1))`，替代原来的 `zeros_like(e1)` | `model.use_stage1_high_skip` |
 | Spectral loss | high spectral loss 可选 `residual/high_raw/high_hat`；v2 配置默认使用 `high_raw` | `loss.spectral_high_target` |
 | Training stability | 非有限 loss 直接中止；额外保存 `last_finite.pt` 和多指标 best checkpoint | `train.clip_grad_norm` / `train.grad_clip_norm` |
-| Wavelet ablation | 增加轻量 Haar-like residual 选项，用 avgpool+nearest upsample 近似低频并取残差 | `model.mirfd.residual_type: wavelet` |
+| Pyramid avgpool ablation | 增加轻量 pyramid residual 选项，用 avgpool+nearest upsample 近似低频并取残差；这不是严格 Haar wavelet | `model.mirfd.residual_type: pyramid_avgpool` |
 
 ### 10.2 新增/修改文件
 
 | File | Change |
 |---|---|
-| `mirfd/models/mirfd_block.py` | 新增 `FixedDepthwiseBlur`、`LowSmooth`、`high_residual_mode`、`gate_mode`、`wavelet` residual，并返回 `low0/low/residual/high_raw/high_hat/gate` |
+| `mirfd/models/mirfd_block.py` | 新增 `FixedDepthwiseBlur`、`LowSmooth`、`high_residual_mode`、`gate_mode`、`pyramid_avgpool` residual，并返回 `low0/low/residual/high_raw/high_hat/gate` |
 | `mirfd/models/mirfd_net.py` | 接入 Stage1 high skip，decoder 使用 `high_hat`，feature dict 暴露 v2 诊断特征 |
 | `mirfd/losses.py` | 增加 `spectral_high_target`，支持对 `high_raw` 或 `residual` 做高频正则 |
 | `scripts/train.py` | 增加 NaN 保护、`grad_clip_norm` 别名、多指标 checkpoint |
@@ -345,7 +345,7 @@ model:
     gate_mode: suppress
   use_stage1_high_skip: false
 loss:
-  spectral_high_target: high
+  spectral_high_target: high_raw
 ```
 
 因此旧实验 checkpoint 对应的结构语义仍然清晰；v2 实验需要显式使用新增 v2 配置。

@@ -111,6 +111,7 @@ class MIRFDNet(nn.Module):
         dims = dims or (base_dim, base_dim * 2, base_dim * 4, base_dim * 8)
         block_kwargs = block_kwargs or {}
         self.use_aux_heads = use_aux_heads
+        self.use_high_residual_skip = use_high_residual_skip
         self.use_stage1_high_skip = use_stage1_high_skip
 
         self.stem = ConvNormAct(in_channels, dims[0], kernel_size=3, stride=2, norm=norm)
@@ -150,7 +151,7 @@ class MIRFDNet(nn.Module):
         return_dict: bool | None = None,
     ):
         input_size = x.shape[-2:]
-        collect = return_features or self.use_aux_heads
+        collect = return_features or self.use_aux_heads or self.use_high_residual_skip
 
         e1 = self.stage1(self.stem(x))
         e2_in = self.down12(e1)

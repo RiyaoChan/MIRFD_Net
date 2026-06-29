@@ -99,7 +99,7 @@ class MIRFDLoss(nn.Module):
         spectral_low_weight: float = 0.0,
         spectral_high_weight: float = 0.0,
         spectral_low_radius_ratio: float = 0.25,
-        spectral_high_target: str = "high",
+        spectral_high_target: str = "high_raw",
     ) -> None:
         super().__init__()
         if spectral_high_target not in {"high", "high_hat", "high_raw", "residual"}:

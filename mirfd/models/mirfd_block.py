@@ -73,7 +73,7 @@ class TargetAwareGate(nn.Module):
 class MIRFDBlock(nn.Module):
     """Mamba-induced residual frequency decoupling block."""
 
-    SUPPORTED_RESIDUALS = {"mamba_residual", "avgpool", "laplace", "sobel", "wavelet"}
+    SUPPORTED_RESIDUALS = {"mamba_residual", "avgpool", "laplace", "sobel", "pyramid_avgpool"}
     SUPPORTED_FUSIONS = {"concat", "residual_compensation"}
     SUPPORTED_HIGH_RESIDUAL_MODES = {"hfe", "concat_proj", "add"}
     SUPPORTED_GATE_MODES = {"suppress", "enhance", "half_enhance"}

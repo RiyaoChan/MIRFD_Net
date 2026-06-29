@@ -6,7 +6,7 @@
 
 实现状态（2026-06-29）：
 
-- 已实现：LowSmooth、high residual `concat_proj/add`、增强型 gate、Stage1 high skip、`spectral_high_target`、NaN 保护、多指标 checkpoint、v2 FFT 诊断、wavelet residual ablation。
+- 已实现：LowSmooth、high residual `concat_proj/add`、增强型 gate、Stage1 high skip、`spectral_high_target`、NaN 保护、多指标 checkpoint、v2 FFT 诊断、`pyramid_avgpool` residual ablation；真正 Haar wavelet high-frequency 尚未实现。
 - 已新增配置：`configs/mirfd_nuaa_sirst_ss2d_v2.yaml`、`configs/mirfd_nudt_sirst_ss2d_v2.yaml`、`configs/mirfd_irstd_1k_ss2d_v2.yaml`。
 - 默认兼容：旧配置默认仍使用 v1 行为，即 `use_low_smooth=false`、`high_residual_mode=hfe`、`gate_mode=suppress`、`use_stage1_high_skip=false`。
 
@@ -531,12 +531,12 @@ spectral_high_target: high_raw
 | AvgPool residual | `F - Up(AvgPool(F))` |
 | Laplace residual | 显式 Laplace high |
 | Sobel residual | Sobel edge |
-| Wavelet residual | 小波高频，建议补充 |
+| Pyramid avgpool residual | avgpool 金字塔残差，作为轻量外部分频对照；真正 Haar wavelet 可后续补充 |
 
 最关键对比：
 
 ```text
-mamba_residual vs avgpool_residual vs laplace_residual vs sobel_residual vs wavelet_residual
+mamba_residual vs avgpool_residual vs laplace_residual vs sobel_residual vs pyramid_avgpool_residual
 ```
 
 ---
@@ -556,7 +556,7 @@ mamba_residual vs avgpool_residual vs laplace_residual vs sobel_residual vs wave
 - [ ] validation 诊断输出增加 `residual / high_raw / high_hat / gate`。
 - [ ] train 脚本增加 NaN 保护、梯度裁剪和 checkpoint 管理。
 - [ ] config 增加所有 ablation 开关。
-- [ ] 增加 wavelet residual ablation，如复杂则先实现 Haar wavelet high-frequency。
+- [ ] 增加 `pyramid_avgpool` residual ablation；真正 Haar wavelet high-frequency 如需写入论文需后续单独实现。
 - [ ] README 和实验记录文档更新 v2 说明。
 
 ---
@@ -585,7 +585,7 @@ mamba_residual vs avgpool_residual vs laplace_residual vs sobel_residual vs wave
 | MIRFD v2 without LowSmooth | 证明 Mamba-induced residual 本身有效 |
 | MIRFD v2 with LowSmooth | 证明校准进一步增强 |
 | AvgPool residual | 证明不是普通 smoothing residual |
-| Laplace/Wavelet residual | 证明不是传统显式分频 |
+| Laplace/Sobel/Pyramid residual | 证明不是传统显式分频 |
 
 只要 `without LowSmooth` 已经优于 baseline，而 `with LowSmooth` 进一步提升，就不会严重削弱核心创新。
 

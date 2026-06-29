@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 import sys
 
@@ -11,10 +12,11 @@ import torch
 
 from mirfd.losses import MIRFDLoss
 from mirfd.metrics import segmentation_metrics
-from mirfd.models import MIRFDNet
+from mirfd.models import MIRFDNet, build_model
+from mirfd.utils import load_config
 
 
-def main() -> None:
+def run_basic_smoke() -> None:
     model = MIRFDNet(
         in_channels=1,
         num_classes=1,
@@ -31,7 +33,43 @@ def main() -> None:
     loss.backward()
     metrics = segmentation_metrics(outputs["logits"], y)
     assert "pd" in metrics and "fa" in metrics
-    print("smoke ok", details)
+    print("basic smoke ok", details)
+
+
+def run_v2_config_smoke() -> None:
+    cfg = deepcopy(load_config(ROOT / "configs" / "mirfd_nuaa_sirst_ss2d_v2.yaml"))
+
+    cfg["model"]["base_dim"] = 8
+    cfg["model"]["depths"] = [1, 1, 1, 1]
+    cfg["model"]["use_aux_heads"] = False
+    cfg["model"]["mamba"]["variant"] = "fallback"
+    cfg["model"]["mamba"]["scan_backend"] = "ref"
+    cfg["loss"]["spectral_low_weight"] = 0.001
+    cfg["loss"]["spectral_high_weight"] = 0.001
+    cfg["loss"]["spectral_high_target"] = "high_raw"
+
+    model = build_model(cfg)
+    x = torch.randn(2, 1, 64, 64)
+    y = (torch.rand(2, 1, 64, 64) > 0.97).float()
+
+    logits = model(x, return_dict=False)
+    assert logits.shape == (2, 1, 64, 64)
+
+    outputs = model(x, return_features=True)
+    assert outputs["logits"].shape == (2, 1, 64, 64)
+    for key in ("low", "residual", "high_raw", "high_hat", "gate"):
+        assert key in outputs["features"]
+
+    criterion = MIRFDLoss(**cfg["loss"])
+    loss, details = criterion(outputs, y)
+    loss.backward()
+    assert "spectral_high" in details
+    print("v2 config smoke ok", details)
+
+
+def main() -> None:
+    run_basic_smoke()
+    run_v2_config_smoke()
 
 
 if __name__ == "__main__":
