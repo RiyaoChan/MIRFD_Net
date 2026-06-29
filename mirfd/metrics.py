@@ -48,12 +48,27 @@ def _connected_components(mask: np.ndarray) -> tuple[int, np.ndarray]:
     return current + 1, labels
 
 
+def _component_centroids_and_areas(labels: np.ndarray, labels_count: int) -> dict[int, tuple[np.ndarray, int]]:
+    components = {}
+    for label_id in range(1, labels_count):
+        ys, xs = np.nonzero(labels == label_id)
+        if ys.size == 0:
+            continue
+        centroid = np.array([ys.mean(), xs.mean()], dtype=np.float32)
+        components[label_id] = (centroid, int(ys.size))
+    return components
+
+
 @torch.no_grad()
 def segmentation_metric_counts(
     logits: torch.Tensor,
     target: torch.Tensor,
     threshold: float = 0.5,
+    pd_fa_mode: str = "overlap",
+    pd_fa_distance: float = 3.0,
 ) -> dict[str, float]:
+    if pd_fa_mode not in {"overlap", "centroid"}:
+        raise ValueError(f"Unsupported pd_fa_mode: {pd_fa_mode}")
     pred, target = _prepare_binary(logits, target, threshold)
 
     intersection = (pred & target).sum().float()
@@ -71,12 +86,35 @@ def segmentation_metric_counts(
     target_np = target.detach().cpu().numpy().astype(np.uint8)
     detected_targets = 0
     target_instances = 0
+    centroid_false_alarm_pixels = 0
     for idx in range(target_np.shape[0]):
         labels_count, labels = _connected_components(target_np[idx, 0])
         target_instances += max(labels_count - 1, 0)
-        for label_id in range(1, labels_count):
-            if np.any(pred_np[idx, 0][labels == label_id]):
-                detected_targets += 1
+        if pd_fa_mode == "overlap":
+            for label_id in range(1, labels_count):
+                if np.any(pred_np[idx, 0][labels == label_id]):
+                    detected_targets += 1
+            continue
+
+        pred_count, pred_labels = _connected_components(pred_np[idx, 0])
+        pred_components = _component_centroids_and_areas(pred_labels, pred_count)
+        target_components = _component_centroids_and_areas(labels, labels_count)
+        matched_pred_ids: set[int] = set()
+        for target_centroid, _ in target_components.values():
+            for pred_id, (pred_centroid, _) in pred_components.items():
+                if pred_id in matched_pred_ids:
+                    continue
+                if np.linalg.norm(pred_centroid - target_centroid) < pd_fa_distance:
+                    matched_pred_ids.add(pred_id)
+                    detected_targets += 1
+                    break
+        centroid_false_alarm_pixels += sum(
+            area for pred_id, (_, area) in pred_components.items() if pred_id not in matched_pred_ids
+        )
+
+    false_alarm_value = (
+        centroid_false_alarm_pixels if pd_fa_mode == "centroid" else float(false_positive.cpu())
+    )
 
     return {
         "intersection": float(intersection.cpu()),
@@ -87,7 +125,7 @@ def segmentation_metric_counts(
         "images": float(pred.shape[0]),
         "detected_targets": float(detected_targets),
         "target_instances": float(target_instances),
-        "false_positive_pixels": float(false_positive.cpu()),
+        "false_positive_pixels": float(false_alarm_value),
         "total_pixels": float(total_pixels.cpu()),
     }
 
@@ -116,9 +154,14 @@ def segmentation_metrics(
     logits: torch.Tensor,
     target: torch.Tensor,
     threshold: float = 0.5,
+    pd_fa_mode: str = "overlap",
+    pd_fa_distance: float = 3.0,
     eps: float = 1e-6,
 ) -> dict[str, float]:
-    return metrics_from_counts(segmentation_metric_counts(logits, target, threshold), eps=eps)
+    return metrics_from_counts(
+        segmentation_metric_counts(logits, target, threshold, pd_fa_mode, pd_fa_distance),
+        eps=eps,
+    )
 
 
 class MetricAverager:
@@ -138,12 +181,25 @@ class MetricAverager:
 
 
 class SegmentationMetricAccumulator:
-    def __init__(self, threshold: float = 0.5) -> None:
+    def __init__(
+        self,
+        threshold: float = 0.5,
+        pd_fa_mode: str = "overlap",
+        pd_fa_distance: float = 3.0,
+    ) -> None:
         self.threshold = threshold
+        self.pd_fa_mode = pd_fa_mode
+        self.pd_fa_distance = pd_fa_distance
         self.counts: dict[str, float] = {}
 
     def update(self, logits: torch.Tensor, target: torch.Tensor) -> None:
-        batch_counts = segmentation_metric_counts(logits, target, threshold=self.threshold)
+        batch_counts = segmentation_metric_counts(
+            logits,
+            target,
+            threshold=self.threshold,
+            pd_fa_mode=self.pd_fa_mode,
+            pd_fa_distance=self.pd_fa_distance,
+        )
         for key, value in batch_counts.items():
             self.counts[key] = self.counts.get(key, 0.0) + value
 

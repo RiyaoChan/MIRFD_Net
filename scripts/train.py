@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 import sys
 
@@ -41,10 +42,86 @@ def make_loader(cfg: dict, split: str, batch_size: int, shuffle: bool) -> DataLo
     )
 
 
+def build_optimizer(model: torch.nn.Module, train_cfg: dict) -> torch.optim.Optimizer:
+    name = train_cfg.get("optimizer", "AdamW").lower()
+    lr = train_cfg.get("lr", 3e-4)
+    weight_decay = train_cfg.get("weight_decay", 1e-2)
+    betas = tuple(train_cfg.get("betas", (0.9, 0.999)))
+    eps = train_cfg.get("eps", 1e-8)
+    if name == "adamw":
+        return torch.optim.AdamW(
+            model.parameters(),
+            lr=lr,
+            betas=betas,
+            eps=eps,
+            weight_decay=weight_decay,
+            amsgrad=train_cfg.get("amsgrad", False),
+        )
+    if name == "adam":
+        return torch.optim.Adam(
+            model.parameters(),
+            lr=lr,
+            betas=betas,
+            eps=eps,
+            weight_decay=weight_decay,
+        )
+    if name == "adagrad":
+        return torch.optim.Adagrad(model.parameters(), lr=lr, weight_decay=weight_decay)
+    if name == "sgd":
+        return torch.optim.SGD(
+            model.parameters(),
+            lr=lr,
+            momentum=train_cfg.get("momentum", 0.9),
+            weight_decay=weight_decay,
+        )
+    raise ValueError(f"Unsupported optimizer: {train_cfg.get('optimizer')}")
+
+
+def build_scheduler(
+    optimizer: torch.optim.Optimizer,
+    train_cfg: dict,
+    epochs: int,
+    steps_per_epoch: int,
+):
+    name = str(train_cfg.get("scheduler", "cosine")).lower()
+    if name in {"none", "null", "off"}:
+        return None, "epoch"
+
+    step_unit = str(train_cfg.get("scheduler_step", "epoch")).lower()
+    if step_unit not in {"epoch", "iter"}:
+        raise ValueError(f"Unsupported scheduler_step: {step_unit}")
+
+    eta_min = float(train_cfg.get("eta_min", train_cfg.get("min_lr", 0.0)))
+    warmup_epochs = int(train_cfg.get("warmup_epochs", 0))
+    if name == "cosine" and warmup_epochs <= 0 and step_unit == "epoch":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=eta_min), step_unit
+
+    if name not in {"cosine", "cosine_warmup"}:
+        raise ValueError(f"Unsupported scheduler: {train_cfg.get('scheduler')}")
+
+    total_steps = max(epochs * steps_per_epoch if step_unit == "iter" else epochs, 1)
+    warmup_steps = max(warmup_epochs * steps_per_epoch if step_unit == "iter" else warmup_epochs, 0)
+    base_lr = float(train_cfg.get("lr", optimizer.param_groups[0]["lr"]))
+    min_factor = eta_min / max(base_lr, 1e-12)
+
+    def lr_lambda(step: int) -> float:
+        if warmup_steps > 0 and step < warmup_steps:
+            return max(float(step + 1) / float(warmup_steps), 1e-8)
+        denom = max(total_steps - warmup_steps, 1)
+        progress = min(max(float(step - warmup_steps) / float(denom), 0.0), 1.0)
+        return min_factor + 0.5 * (1.0 - min_factor) * (1.0 + math.cos(math.pi * progress))
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda), step_unit
+
+
 @torch.no_grad()
-def evaluate(model, loader, device, need_features: bool) -> dict[str, float]:
+def evaluate(model, loader, device, need_features: bool, metrics_cfg: dict) -> dict[str, float]:
     model.eval()
-    meter = SegmentationMetricAccumulator()
+    meter = SegmentationMetricAccumulator(
+        threshold=metrics_cfg.get("threshold", 0.5),
+        pd_fa_mode=metrics_cfg.get("pd_fa_mode", "overlap"),
+        pd_fa_distance=metrics_cfg.get("pd_fa_distance", 3.0),
+    )
     for batch in tqdm(loader, desc="val", leave=False):
         images = batch["image"].to(device, non_blocking=True)
         masks = batch["mask"].to(device, non_blocking=True)
@@ -68,30 +145,25 @@ def main() -> None:
 
     train_cfg = cfg.get("train", {})
     loss_cfg = cfg.get("loss", {})
+    metrics_cfg = cfg.get("metrics", {})
     batch_size = train_cfg.get("batch_size", 8)
+    eval_batch_size = train_cfg.get("eval_batch_size", batch_size)
 
     train_loader = make_loader(cfg, "train", batch_size, shuffle=True)
     try:
-        val_loader = make_loader(cfg, "val", batch_size, shuffle=False)
+        val_loader = make_loader(cfg, "val", eval_batch_size, shuffle=False)
     except ValueError:
         val_loader = None
 
     model = build_model(cfg).to(device)
     criterion = MIRFDLoss(**loss_cfg)
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=train_cfg.get("lr", 3e-4),
-        weight_decay=train_cfg.get("weight_decay", 1e-2),
-    )
+    optimizer = build_optimizer(model, train_cfg)
     epochs = train_cfg.get("epochs", 300)
-    scheduler = (
-        torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-        if train_cfg.get("scheduler", "cosine") == "cosine"
-        else None
-    )
+    scheduler, scheduler_step = build_scheduler(optimizer, train_cfg, epochs, len(train_loader))
     use_amp = bool(train_cfg.get("amp", True) and device.type == "cuda")
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     need_features = loss_cfg.get("spectral_low_weight", 0.0) > 0.0 or loss_cfg.get("spectral_high_weight", 0.0) > 0.0
+    clip_grad_norm = train_cfg.get("clip_grad_norm")
 
     best_iou = -1.0
     for epoch in range(1, epochs + 1):
@@ -107,24 +179,47 @@ def main() -> None:
                 outputs = model(images, return_features=need_features)
                 loss, details = criterion(outputs, masks)
             scaler.scale(loss).backward()
+            if clip_grad_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(clip_grad_norm))
             scaler.step(optimizer)
             scaler.update()
+            if scheduler is not None and scheduler_step == "iter":
+                scheduler.step()
 
             loss_meter.update(details["total"], n=images.size(0))
-            progress.set_postfix(loss=f"{loss_meter.avg:.4f}")
+            progress.set_postfix(loss=f"{loss_meter.avg:.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
 
-        if scheduler is not None:
+        if scheduler is not None and scheduler_step == "epoch":
             scheduler.step()
 
-        metrics = evaluate(model, val_loader, device, need_features=False) if val_loader is not None else {}
+        metrics = evaluate(model, val_loader, device, need_features=False, metrics_cfg=metrics_cfg) if val_loader is not None else {}
         current_iou = metrics.get("iou", -1.0)
-        save_checkpoint(out_dir / "last.pt", model, epoch=epoch, optimizer=optimizer.state_dict(), metrics=metrics, config=cfg)
+        save_checkpoint(
+            out_dir / "last.pt",
+            model,
+            epoch=epoch,
+            optimizer=optimizer.state_dict(),
+            scheduler=scheduler.state_dict() if scheduler is not None else None,
+            metrics=metrics,
+            config=cfg,
+        )
         if current_iou > best_iou:
             best_iou = current_iou
-            save_checkpoint(out_dir / "best.pt", model, epoch=epoch, optimizer=optimizer.state_dict(), metrics=metrics, config=cfg)
+            save_checkpoint(
+                out_dir / "best.pt",
+                model,
+                epoch=epoch,
+                optimizer=optimizer.state_dict(),
+                scheduler=scheduler.state_dict() if scheduler is not None else None,
+                metrics=metrics,
+                config=cfg,
+            )
 
-        metric_text = " ".join([f"{k}={v:.4f}" for k, v in metrics.items()])
-        print(f"epoch={epoch} train_loss={loss_meter.avg:.4f} {metric_text}")
+        metric_text = " ".join(
+            [f"{k}={v:.6f}" if k == "fa" else f"{k}={v:.4f}" for k, v in metrics.items()]
+        )
+        print(f"epoch={epoch} train_loss={loss_meter.avg:.4f} lr={optimizer.param_groups[0]['lr']:.8f} {metric_text}")
 
 
 if __name__ == "__main__":

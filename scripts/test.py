@@ -26,6 +26,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--pd-fa-mode", choices=["overlap", "centroid"], default=None)
+    parser.add_argument("--pd-fa-distance", type=float, default=None)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
 
@@ -50,7 +52,12 @@ def main() -> None:
         pin_memory=torch.cuda.is_available(),
     )
 
-    meter = SegmentationMetricAccumulator(threshold=args.threshold)
+    metrics_cfg = cfg.get("metrics", {})
+    meter = SegmentationMetricAccumulator(
+        threshold=args.threshold if args.threshold is not None else metrics_cfg.get("threshold", 0.5),
+        pd_fa_mode=args.pd_fa_mode or metrics_cfg.get("pd_fa_mode", "overlap"),
+        pd_fa_distance=args.pd_fa_distance if args.pd_fa_distance is not None else metrics_cfg.get("pd_fa_distance", 3.0),
+    )
     with torch.no_grad():
         for batch in tqdm(loader, desc=args.split):
             images = batch["image"].to(device, non_blocking=True)
