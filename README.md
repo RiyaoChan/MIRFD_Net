@@ -4,16 +4,22 @@ PyTorch implementation of Mamba-Induced Residual Frequency Decoupling for infrar
 
 Experiment logs, current best results, feature-frequency diagnostics, and model-level failure analysis are recorded in [EXPERIMENT_RESULTS_AND_ANALYSIS.md](EXPERIMENT_RESULTS_AND_ANALYSIS.md).
 
-The core idea is to use the Mamba-style 2D propagation output as an adaptive low-frequency semantic approximation, then recover target-sensitive high-frequency details with the input-output residual. In the v2 block, the Mamba-induced low representation is lightly calibrated, the raw residual is kept in the high branch, and the gate acts as an enhancer:
+The core idea is to use the Mamba-style 2D propagation output as an adaptive low-frequency semantic approximation, then recover target-sensitive high-frequency details with the input-output residual. In the v2/v2.1 block, the Mamba-induced low representation is lightly calibrated, the raw residual is kept in the high branch, and the gate modulates the high response:
 
 ```text
-low0     = Align(SS2D(Norm(F)))
-low      = LowSmooth(low0)
-R        = F - low
-high_raw = Proj(concat(R, HighFrequencyEnhancer(R)))
-G        = TargetAwareGate(low, R)
-high_hat = (1 + alpha * G) * high_raw
-Out      = Fuse(low, high_hat) + F
+low0      = Align(SS2D(Norm(F)))
+low       = LowSmooth(low0)
+R         = F - low
+high_raw  = HFE(R), Proj(concat(R, HFE(R))), or R + gamma * HFE(R)
+G         = TargetAwareGate(low, R)
+high_hat  = GateModulation(G, high_raw)
+Out       = Fuse(low, high_hat) + F
+```
+
+For the v2.1 centered gate:
+
+```text
+GateModulation(G, high_raw) = [1 + alpha * (G - 0.5)] * high_raw
 ```
 
 ## MIRFD-Net v2 switches
@@ -21,10 +27,12 @@ Out      = Fuse(low, high_hat) + F
 The v2 implementation keeps SS2D/VMamba-style modeling inside the MIRFD block, not as a full VMamba backbone. It adds the following ablation switches:
 
 - `model.mirfd.use_low_smooth`: applies lightweight low-pass calibration to the Mamba-induced low representation.
-- `model.mirfd.high_residual_mode`: `hfe`, `concat_proj`, or `add`; `concat_proj` keeps the raw residual beside the HFE output.
-- `model.mirfd.gate_mode`: `suppress`, `enhance`, or `half_enhance`; `enhance` uses `(1 + alpha * gate) * high_raw`.
-- `model.use_stage1_high_skip`: adds shallow high-frequency skip information at the highest decoder resolution.
+- `model.mirfd.high_residual_mode`: `hfe`, `concat_proj`, `add`, or `add_scaled`; `add_scaled` uses `residual + gamma * HFE(residual)`.
+- `model.mirfd.gate_mode`: `suppress`, `enhance`, `half_enhance`, or `centered`; `centered` uses `(1 + alpha * (gate - 0.5)) * high_raw`.
+- `model.high_skip_stages`: selects which high responses enter decoder skips, e.g. `[1, 2]` for shallow high skip only.
+- `model.use_stage1_high_skip`: legacy switch for adding shallow high-frequency skip information when `high_skip_stages` is not set.
 - `loss.spectral_high_target`: chooses `residual`, `high_raw`, or `high_hat` for high-branch spectral regularization.
+- `loss.gate_aux_weight` / `loss.gate_bg_weight`: optional light supervision for gate target-awareness.
 
 Ready-to-run v2 configs:
 

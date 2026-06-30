@@ -44,9 +44,16 @@ def run_v2_config_smoke() -> None:
     cfg["model"]["use_aux_heads"] = False
     cfg["model"]["mamba"]["variant"] = "fallback"
     cfg["model"]["mamba"]["scan_backend"] = "ref"
+    cfg["model"]["high_skip_stages"] = [1, 2]
+    cfg["model"]["mirfd"]["gate_mode"] = "centered"
+    cfg["model"]["mirfd"]["gate_scale_min"] = 0.25
+    cfg["model"]["mirfd"]["gate_scale_max"] = 1.75
+    cfg["model"]["mirfd"]["high_residual_mode"] = "add_scaled"
+    cfg["model"]["mirfd"]["hfe_scale_init"] = 0.1
     cfg["loss"]["spectral_low_weight"] = 0.001
     cfg["loss"]["spectral_high_weight"] = 0.001
     cfg["loss"]["spectral_high_target"] = "high_raw"
+    cfg["loss"]["gate_bg_weight"] = 0.01
 
     model = build_model(cfg)
     x = torch.randn(2, 1, 64, 64)

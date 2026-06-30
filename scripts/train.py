@@ -200,7 +200,12 @@ def main() -> None:
     scheduler, scheduler_step = build_scheduler(optimizer, train_cfg, epochs, len(train_loader))
     use_amp = bool(train_cfg.get("amp", True) and device.type == "cuda")
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-    need_features = loss_cfg.get("spectral_low_weight", 0.0) > 0.0 or loss_cfg.get("spectral_high_weight", 0.0) > 0.0
+    need_features = (
+        loss_cfg.get("spectral_low_weight", 0.0) > 0.0
+        or loss_cfg.get("spectral_high_weight", 0.0) > 0.0
+        or loss_cfg.get("gate_aux_weight", 0.0) > 0.0
+        or loss_cfg.get("gate_bg_weight", 0.0) > 0.0
+    )
     clip_grad_norm = train_cfg.get("clip_grad_norm", train_cfg.get("grad_clip_norm"))
 
     best_iou = -1.0

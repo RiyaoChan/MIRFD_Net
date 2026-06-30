@@ -75,8 +75,8 @@ class MIRFDBlock(nn.Module):
 
     SUPPORTED_RESIDUALS = {"mamba_residual", "avgpool", "laplace", "sobel", "pyramid_avgpool"}
     SUPPORTED_FUSIONS = {"concat", "residual_compensation"}
-    SUPPORTED_HIGH_RESIDUAL_MODES = {"hfe", "concat_proj", "add"}
-    SUPPORTED_GATE_MODES = {"suppress", "enhance", "half_enhance"}
+    SUPPORTED_HIGH_RESIDUAL_MODES = {"hfe", "concat_proj", "add", "add_scaled"}
+    SUPPORTED_GATE_MODES = {"suppress", "enhance", "half_enhance", "centered"}
 
     def __init__(
         self,
@@ -93,8 +93,11 @@ class MIRFDBlock(nn.Module):
         use_low_smooth: bool = False,
         low_smooth_beta_init: float = 0.3,
         high_residual_mode: str = "hfe",
+        hfe_scale_init: float = 0.1,
         gate_mode: str = "suppress",
         gate_alpha_init: float = 1.0,
+        gate_scale_min: float = 0.25,
+        gate_scale_max: float = 1.75,
     ) -> None:
         super().__init__()
         if residual_type not in self.SUPPORTED_RESIDUALS:
@@ -105,6 +108,8 @@ class MIRFDBlock(nn.Module):
             raise ValueError(f"Unsupported high_residual_mode: {high_residual_mode}")
         if gate_mode not in self.SUPPORTED_GATE_MODES:
             raise ValueError(f"Unsupported gate_mode: {gate_mode}")
+        if gate_scale_max <= gate_scale_min:
+            raise ValueError("gate_scale_max must be greater than gate_scale_min")
 
         mamba_block = mamba_block or build_mamba_block
         mamba_kwargs = mamba_kwargs or {}
@@ -114,6 +119,8 @@ class MIRFDBlock(nn.Module):
         self.use_gate = use_gate
         self.high_residual_mode = high_residual_mode
         self.gate_mode = gate_mode
+        self.gate_scale_min = float(gate_scale_min)
+        self.gate_scale_max = float(gate_scale_max)
         self.norm = make_norm(pre_norm, dim)
         self.mamba = mamba_block(dim, **mamba_kwargs)
         self.align = nn.Sequential(
@@ -127,6 +134,8 @@ class MIRFDBlock(nn.Module):
             if high_residual_mode == "concat_proj"
             else nn.Identity()
         )
+        if high_residual_mode == "add_scaled":
+            self.hfe_scale = nn.Parameter(torch.tensor(float(hfe_scale_init)))
         self.gate = TargetAwareGate(dim, norm=norm) if use_gate else None
         self.gate_alpha = nn.Parameter(torch.tensor(float(gate_alpha_init)))
 
@@ -192,6 +201,9 @@ class MIRFDBlock(nn.Module):
             return self.high_proj(torch.cat([residual, hfe_out], dim=1))
         if self.high_residual_mode == "add":
             return residual + hfe_out
+        if self.high_residual_mode == "add_scaled":
+            scale = torch.clamp(self.hfe_scale, 0.0, 1.0)
+            return residual + scale * hfe_out
         return hfe_out
 
     def _apply_gate(self, high_raw: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
@@ -199,6 +211,11 @@ class MIRFDBlock(nn.Module):
             return gate * high_raw
         if self.gate_mode == "half_enhance":
             return (0.5 + gate) * high_raw
+        if self.gate_mode == "centered":
+            alpha = torch.clamp(self.gate_alpha, 0.0, 2.0)
+            scale = 1.0 + alpha * (gate - 0.5)
+            scale = torch.clamp(scale, self.gate_scale_min, self.gate_scale_max)
+            return scale * high_raw
         alpha = torch.clamp(self.gate_alpha, 0.0, 2.0)
         return (1.0 + alpha * gate) * high_raw
 

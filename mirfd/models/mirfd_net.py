@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 import torch
@@ -104,6 +105,7 @@ class MIRFDNet(nn.Module):
         block_kwargs: dict[str, Any] | None = None,
         use_high_residual_skip: bool = True,
         use_stage1_high_skip: bool = False,
+        high_skip_stages: Iterable[int] | None = None,
         use_aux_heads: bool = True,
         norm: str = "batch",
     ) -> None:
@@ -112,7 +114,17 @@ class MIRFDNet(nn.Module):
         block_kwargs = block_kwargs or {}
         self.use_aux_heads = use_aux_heads
         self.use_high_residual_skip = use_high_residual_skip
-        self.use_stage1_high_skip = use_stage1_high_skip
+        if high_skip_stages is None:
+            stages = {2, 3} if use_high_residual_skip else set()
+            if use_stage1_high_skip:
+                stages.add(1)
+        else:
+            stages = {int(stage) for stage in high_skip_stages}
+            invalid_stages = stages - {1, 2, 3, 4}
+            if invalid_stages:
+                raise ValueError(f"Unsupported high_skip_stages: {sorted(invalid_stages)}")
+        self.high_skip_stages = stages
+        self.use_stage1_high_skip = 1 in self.high_skip_stages
 
         self.stem = ConvNormAct(in_channels, dims[0], kernel_size=3, stride=2, norm=norm)
         self.stage1 = ConvStage(dims[0], depths[0], norm=norm)
@@ -151,7 +163,7 @@ class MIRFDNet(nn.Module):
         return_dict: bool | None = None,
     ):
         input_size = x.shape[-2:]
-        collect = return_features or self.use_aux_heads or self.use_high_residual_skip
+        collect = return_features or self.use_aux_heads or bool(self.high_skip_stages & {2, 3, 4})
 
         e1 = self.stage1(self.stem(x))
         e2_in = self.down12(e1)
@@ -161,9 +173,12 @@ class MIRFDNet(nn.Module):
         e4_in = self.down34(e3)
         e4, b4 = self.stage4(e4_in, return_branches=True) if collect else (self.stage4(e4_in), None)
 
-        d3 = self.dec3(e4, e3, b3["high_hat"] if b3 is not None else None)
-        d2 = self.dec2(d3, e2, b2["high_hat"] if b2 is not None else None)
-        if self.use_stage1_high_skip:
+        h3 = b3["high_hat"] if (b3 is not None and 3 in self.high_skip_stages) else None
+        h2 = b2["high_hat"] if (b2 is not None and 2 in self.high_skip_stages) else None
+
+        d3 = self.dec3(e4, e3, h3)
+        d2 = self.dec2(d3, e2, h2)
+        if 1 in self.high_skip_stages:
             e1_low = self.stage1_blur(e1)
             e1_residual = e1 - e1_low
             e1_high = self.stage1_hfe(e1_residual)
@@ -218,8 +233,11 @@ def build_model(config: dict[str, Any] | None = None) -> MIRFDNet:
         "use_low_smooth": mirfd_cfg.get("use_low_smooth", False),
         "low_smooth_beta_init": mirfd_cfg.get("low_smooth_beta_init", 0.3),
         "high_residual_mode": mirfd_cfg.get("high_residual_mode", "hfe"),
+        "hfe_scale_init": mirfd_cfg.get("hfe_scale_init", 0.1),
         "gate_mode": mirfd_cfg.get("gate_mode", "suppress"),
         "gate_alpha_init": mirfd_cfg.get("gate_alpha_init", 1.0),
+        "gate_scale_min": mirfd_cfg.get("gate_scale_min", 0.25),
+        "gate_scale_max": mirfd_cfg.get("gate_scale_max", 1.75),
         "mamba_kwargs": {
             "variant": mamba_cfg.get("variant", "fallback"),
             "expansion": mamba_cfg.get("expansion", 2.0),
@@ -255,6 +273,7 @@ def build_model(config: dict[str, Any] | None = None) -> MIRFDNet:
         block_kwargs=block_kwargs,
         use_high_residual_skip=decoder_cfg.get("use_high_residual_skip", True),
         use_stage1_high_skip=model_cfg.get("use_stage1_high_skip", decoder_cfg.get("use_stage1_high_skip", False)),
+        high_skip_stages=model_cfg.get("high_skip_stages", decoder_cfg.get("high_skip_stages")),
         use_aux_heads=model_cfg.get("use_aux_heads", True),
         norm=model_cfg.get("norm", "batch"),
     )

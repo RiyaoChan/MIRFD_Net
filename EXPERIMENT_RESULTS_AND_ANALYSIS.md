@@ -384,3 +384,49 @@ python scripts/train.py --config configs/mirfd_irstd_1k_ss2d_v2.yaml --output-di
 ```
 
 IRSTD-1K 建议先观察前 80 epoch 是否稳定。如果稳定但 IoU 不够，再单独加 `spectral_low_weight=0.001`、`spectral_high_weight=0.001` 做对照。
+
+## 11. MIRFD-Net v2.1 centered gate 实验计划（2026-06-30）
+
+根据 `MIRFD_Net_v2_1_centered_gate_improvement_plan.md` 和 `docs/visualizations/v2_feature_diagnostics`，v2 的主要问题不是 high branch 没有高频响应，而是 `high_hat` 经 enhance gate 后变得过强、过宽泛，背景纹理和深层 coarse residual 也被送入 decoder。因此 v2.1 优先验证三个结构改动：
+
+| Change | Motivation | Config switch |
+|---|---|---|
+| Centered gate | 让 gate 从只增强 `[1, 2]` 的 scale 变成可增强/可抑制 `[0.5, 1.5]` 的选择器 | `model.mirfd.gate_mode: centered` |
+| Selective high skip | 只保留浅层和 stage2 high skip，减少 stage3 coarse background residual 注入 decoder | `model.high_skip_stages: [1, 2]` |
+| add_scaled HFE | 保留 `residual = F - low` 原义，限制 HFE 对 residual 的过度重构 | `model.mirfd.high_residual_mode: add_scaled`, `hfe_scale_init: 0.1` |
+
+新增代码开关：
+
+```text
+high_hat = (1 + alpha * (gate - 0.5)) * high_raw       # centered gate
+high_raw = residual + gamma * HFE(residual)            # add_scaled
+high_skip_stages = [1, 2]                              # shallow high skips
+```
+
+第一轮 v2.1 消融固定训练策略为上一轮 v2 no-spectral：SCTransNet-style 数据增强、AdamW、cosine warmup、关闭 spectral loss。这样对比尽量只反映结构变化。
+
+| Experiment | Purpose | Gate | High skip stages | High residual |
+|---|---|---|---|---|
+| A `centered_gate` | 只验证 centered gate 是否缓解 high_hat 过强 | centered | `[1,2,3,4]` | concat_proj |
+| B `shallow_high_skip` | 只验证关闭 stage3 high skip 是否减少背景污染 | enhance | `[1,2]` | concat_proj |
+| C `centered_shallow` | 同时验证 centered gate + shallow high skip | centered | `[1,2]` | concat_proj |
+| D `centered_shallow_add_scaled` | 在 C 基础上限制 HFE 重构强度 | centered | `[1,2]` | add_scaled |
+
+新增配置文件覆盖 NUAA-SIRST、NUDT-SIRST、IRSTD-1K 三个数据集：
+
+```text
+configs/mirfd_<dataset>_ss2d_v2_1_centered_gate.yaml
+configs/mirfd_<dataset>_ss2d_v2_1_shallow_high_skip.yaml
+configs/mirfd_<dataset>_ss2d_v2_1_centered_shallow.yaml
+configs/mirfd_<dataset>_ss2d_v2_1_centered_shallow_add_scaled.yaml
+```
+
+可选 gate loss 已实现但第一轮不启用：
+
+```yaml
+loss:
+  gate_aux_weight: 0.0
+  gate_bg_weight: 0.0
+```
+
+如果 C/D 的可视化仍显示 gate 对背景大面积发亮，再开启 `gate_bg_weight: 0.01` 做第二轮。

@@ -101,6 +101,8 @@ class MIRFDLoss(nn.Module):
         spectral_high_weight: float = 0.0,
         spectral_low_radius_ratio: float = 0.25,
         spectral_high_target: str = "high_raw",
+        gate_aux_weight: float = 0.0,
+        gate_bg_weight: float = 0.0,
     ) -> None:
         super().__init__()
         if spectral_high_target not in {"high", "high_hat", "high_raw", "residual"}:
@@ -112,6 +114,8 @@ class MIRFDLoss(nn.Module):
         self.spectral_high_weight = spectral_high_weight
         self.spectral_low_radius_ratio = spectral_low_radius_ratio
         self.spectral_high_target = spectral_high_target
+        self.gate_aux_weight = gate_aux_weight
+        self.gate_bg_weight = gate_bg_weight
 
     def forward(self, outputs, target: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
         logits = outputs["logits"] if isinstance(outputs, dict) else outputs
@@ -142,6 +146,29 @@ class MIRFDLoss(nn.Module):
             loss = loss + self.spectral_low_weight * low_reg + self.spectral_high_weight * high_reg
             details["spectral_low"] = float(low_reg.detach().cpu())
             details["spectral_high"] = float(high_reg.detach().cpu())
+
+        need_gate = self.gate_aux_weight > 0.0 or self.gate_bg_weight > 0.0
+        if isinstance(outputs, dict) and need_gate and "features" in outputs:
+            gates = [gate for gate in outputs["features"].get("gate", []) if gate is not None]
+            if gates:
+                aux_terms = []
+                bg_terms = []
+                for gate in gates:
+                    gate_map = gate.float().mean(dim=1, keepdim=True).clamp(1e-6, 1.0 - 1e-6)
+                    target_s = _target_like(gate_map, target)
+                    if self.gate_aux_weight > 0.0:
+                        aux_terms.append(F.binary_cross_entropy(gate_map, target_s))
+                    if self.gate_bg_weight > 0.0:
+                        bg = 1.0 - target_s
+                        bg_terms.append((gate_map * bg).sum() / (bg.sum() + 1e-6))
+                if aux_terms:
+                    gate_aux = torch.stack(aux_terms).mean()
+                    loss = loss + self.gate_aux_weight * gate_aux
+                    details["gate_aux"] = float(gate_aux.detach().cpu())
+                if bg_terms:
+                    gate_bg = torch.stack(bg_terms).mean()
+                    loss = loss + self.gate_bg_weight * gate_bg
+                    details["gate_bg"] = float(gate_bg.detach().cpu())
 
         details["total"] = float(loss.detach().cpu())
         return loss, details
