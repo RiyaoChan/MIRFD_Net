@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import csv
 from pathlib import Path
 import sys
@@ -45,10 +46,20 @@ PRESETS = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Visualize V1/V2 MIRFD low-high feature heatmaps.")
+    parser = argparse.ArgumentParser(description="Visualize V1/V2 MIRFD low and gated-high feature heatmaps.")
     parser.add_argument("--datasets", default="all", help="Comma list: nuaa,nudt,irstd or all.")
     parser.add_argument("--split", default="test")
     parser.add_argument("--output-dir", default="outputs/v1_v2_feature_heatmaps")
+    parser.add_argument(
+        "--mode",
+        choices=("compare", "v2-diagnostic", "both"),
+        default="compare",
+        help=(
+            "compare: V1/V2 low and high_hat heatmaps; "
+            "v2-diagnostic: V2 low/residual/high_raw/gate/high_hat; "
+            "both: write both outputs."
+        ),
+    )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=2)
@@ -93,6 +104,19 @@ def to_heatmap(x: np.ndarray, size: int, label: str, vmin: float | None = None, 
 def tensor_response(feat: torch.Tensor, batch_index: int) -> np.ndarray:
     resp = feat[batch_index].detach().float().abs().mean(dim=0).cpu().numpy()
     return resp
+
+
+def gate_response(feat: torch.Tensor, batch_index: int) -> np.ndarray:
+    resp = feat[batch_index].detach().float().mean(dim=0).cpu().numpy()
+    return resp
+
+
+def feature_at(features: dict, key: str, stage_index: int) -> torch.Tensor:
+    if key in features:
+        return features[key][stage_index]
+    if key == "high_hat":
+        return features["high"][stage_index]
+    raise KeyError(f"Feature key '{key}' is not available.")
 
 
 def denormalized_image(image: torch.Tensor, batch_index: int, data_cfg: dict) -> np.ndarray:
@@ -151,9 +175,9 @@ def render_sample(
     feats_v2 = outputs_v2["features"]
     for stage_index, stage_name in enumerate(("S2", "S3", "S4")):
         v1_low = tensor_response(feats_v1["low"][stage_index], batch_index)
-        v1_high = tensor_response(feats_v1["high"][stage_index], batch_index)
+        v1_high = tensor_response(feature_at(feats_v1, "high_hat", stage_index), batch_index)
         v2_low = tensor_response(feats_v2["low"][stage_index], batch_index)
-        v2_high = tensor_response(feats_v2["high"][stage_index], batch_index)
+        v2_high = tensor_response(feature_at(feats_v2, "high_hat", stage_index), batch_index)
 
         low_values = np.concatenate([v1_low.reshape(-1), v2_low.reshape(-1)])
         high_values = np.concatenate([v1_high.reshape(-1), v2_high.reshape(-1)])
@@ -163,9 +187,62 @@ def render_sample(
             np.concatenate(
                 [
                     to_heatmap(v1_low, cell_size, f"V1 {stage_name} low", low_min, low_max),
-                    to_heatmap(v1_high, cell_size, f"V1 {stage_name} high", high_min, high_max),
+                    to_heatmap(v1_high, cell_size, f"V1 {stage_name} high_hat", high_min, high_max),
                     to_heatmap(v2_low, cell_size, f"V2 {stage_name} low", low_min, low_max),
-                    to_heatmap(v2_high, cell_size, f"V2 {stage_name} high", high_min, high_max),
+                    to_heatmap(v2_high, cell_size, f"V2 {stage_name} high_hat", high_min, high_max),
+                ],
+                axis=1,
+            )
+        )
+    return np.concatenate(rows, axis=0)
+
+
+def render_v2_diagnostic_sample(
+    image: torch.Tensor,
+    mask: torch.Tensor,
+    outputs_v2: dict,
+    batch_index: int,
+    data_cfg: dict,
+    cell_size: int,
+    title: str,
+) -> np.ndarray:
+    raw = denormalized_image(image, batch_index, data_cfg)
+    gt = mask[batch_index, 0].detach().float().cpu().numpy()
+    pred_v2 = torch.sigmoid(outputs_v2["logits"][batch_index, 0]).detach().float().cpu().numpy()
+
+    blank = np.full((cell_size, cell_size, 3), 255, dtype=np.uint8)
+    rows: list[np.ndarray] = []
+    rows.append(
+        np.concatenate(
+            [
+                to_bgr_gray(raw, cell_size, f"{title} | input"),
+                to_bgr_gray(gt, cell_size, "GT"),
+                to_heatmap(pred_v2, cell_size, "V2 pred"),
+                label_panel(blank, "V2 comps"),
+                label_panel(blank, "abs/gate mean"),
+            ],
+            axis=1,
+        )
+    )
+
+    feats_v2 = outputs_v2["features"]
+    for stage_index, stage_name in enumerate(("S2", "S3", "S4")):
+        low = tensor_response(feature_at(feats_v2, "low", stage_index), batch_index)
+        residual = tensor_response(feature_at(feats_v2, "residual", stage_index), batch_index)
+        high_raw = tensor_response(feature_at(feats_v2, "high_raw", stage_index), batch_index)
+        gate = gate_response(feature_at(feats_v2, "gate", stage_index), batch_index)
+        high_hat = tensor_response(feature_at(feats_v2, "high_hat", stage_index), batch_index)
+
+        high_values = np.concatenate([residual.reshape(-1), high_raw.reshape(-1), high_hat.reshape(-1)])
+        high_min, high_max = float(np.percentile(high_values, 1.0)), float(np.percentile(high_values, 99.0))
+        rows.append(
+            np.concatenate(
+                [
+                    to_heatmap(low, cell_size, f"V2 {stage_name} low"),
+                    to_heatmap(residual, cell_size, f"V2 {stage_name} residual", high_min, high_max),
+                    to_heatmap(high_raw, cell_size, f"V2 {stage_name} high_raw", high_min, high_max),
+                    to_heatmap(gate, cell_size, f"V2 {stage_name} gate"),
+                    to_heatmap(high_hat, cell_size, f"V2 {stage_name} high_hat", high_min, high_max),
                 ],
                 axis=1,
             )
@@ -222,13 +299,29 @@ def visualize_dataset(key: str, args: argparse.Namespace) -> None:
     model_v1 = build_and_load(preset["v1_config"], preset["v1_checkpoint"], device)
     model_v2 = build_and_load(preset["v2_config"], preset["v2_checkpoint"], device)
 
-    out_dir = ensure_dir(Path(args.output_dir) / key)
-    manifest_path = out_dir / "manifest.csv"
-    preview_paths: list[Path] = []
+    out_root = Path(args.output_dir)
+    compare_dir = ensure_dir(out_root / key) if args.mode in {"compare", "both"} else None
+    diagnostic_dir = ensure_dir(out_root / f"{key}_v2_diagnostic") if args.mode in {"v2-diagnostic", "both"} else None
+    compare_manifest = compare_dir / "manifest.csv" if compare_dir is not None else None
+    diagnostic_manifest = diagnostic_dir / "manifest.csv" if diagnostic_dir is not None else None
+    compare_preview_paths: list[Path] = []
+    diagnostic_preview_paths: list[Path] = []
     written = 0
-    with manifest_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["index", "image_path", "mask_path", "output_path"])
+    with ExitStack() as stack:
+        compare_writer = None
+        diagnostic_writer = None
+        if compare_manifest is not None:
+            compare_handle = stack.enter_context(compare_manifest.open("w", newline="", encoding="utf-8"))
+            compare_writer = csv.writer(compare_handle)
+        if diagnostic_manifest is not None:
+            diagnostic_handle = stack.enter_context(diagnostic_manifest.open("w", newline="", encoding="utf-8"))
+            diagnostic_writer = csv.writer(diagnostic_handle)
+        if compare_manifest is not None:
+            assert compare_writer is not None
+            compare_writer.writerow(["index", "image_path", "mask_path", "output_path"])
+        if diagnostic_manifest is not None:
+            assert diagnostic_writer is not None
+            diagnostic_writer.writerow(["index", "image_path", "mask_path", "output_path"])
         with torch.no_grad():
             for batch in loader:
                 images = batch["image"].to(device, non_blocking=True)
@@ -239,24 +332,46 @@ def visualize_dataset(key: str, args: argparse.Namespace) -> None:
                 mask_paths = batch["mask_path"]
                 for batch_index, image_path in enumerate(image_paths):
                     stem = Path(image_path).stem
-                    panel = render_sample(
-                        images,
-                        masks,
-                        outputs_v1,
-                        outputs_v2,
-                        batch_index,
-                        data_cfg,
-                        args.cell_size,
-                        preset["name"],
-                    )
-                    out_path = out_dir / f"{written:04d}_{stem}.png"
-                    cv2.imwrite(str(out_path), panel)
-                    if len(preview_paths) < args.contact_sheet_samples:
-                        preview_paths.append(out_path)
-                    writer.writerow([written, image_path, mask_paths[batch_index], out_path])
+                    if compare_dir is not None:
+                        assert compare_writer is not None
+                        panel = render_sample(
+                            images,
+                            masks,
+                            outputs_v1,
+                            outputs_v2,
+                            batch_index,
+                            data_cfg,
+                            args.cell_size,
+                            preset["name"],
+                        )
+                        out_path = compare_dir / f"{written:04d}_{stem}.png"
+                        cv2.imwrite(str(out_path), panel)
+                        if len(compare_preview_paths) < args.contact_sheet_samples:
+                            compare_preview_paths.append(out_path)
+                        compare_writer.writerow([written, image_path, mask_paths[batch_index], out_path])
+                    if diagnostic_dir is not None:
+                        assert diagnostic_writer is not None
+                        diagnostic_panel = render_v2_diagnostic_sample(
+                            images,
+                            masks,
+                            outputs_v2,
+                            batch_index,
+                            data_cfg,
+                            args.cell_size,
+                            preset["name"],
+                        )
+                        diagnostic_out_path = diagnostic_dir / f"{written:04d}_{stem}.png"
+                        cv2.imwrite(str(diagnostic_out_path), diagnostic_panel)
+                        if len(diagnostic_preview_paths) < args.contact_sheet_samples:
+                            diagnostic_preview_paths.append(diagnostic_out_path)
+                        diagnostic_writer.writerow([written, image_path, mask_paths[batch_index], diagnostic_out_path])
                     written += 1
-    make_contact_sheet(preview_paths, out_dir / "contact_sheet.png")
-    print(f"{preset['name']}: wrote {written} visualizations to {out_dir}")
+    if compare_dir is not None:
+        make_contact_sheet(compare_preview_paths, compare_dir / "contact_sheet.png")
+        print(f"{preset['name']}: wrote {written} comparison visualizations to {compare_dir}")
+    if diagnostic_dir is not None:
+        make_contact_sheet(diagnostic_preview_paths, diagnostic_dir / "contact_sheet.png")
+        print(f"{preset['name']}: wrote {written} V2 diagnostic visualizations to {diagnostic_dir}")
 
 
 def main() -> None:
