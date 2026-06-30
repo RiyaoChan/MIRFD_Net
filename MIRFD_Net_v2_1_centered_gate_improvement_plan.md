@@ -67,12 +67,12 @@ high_hat = (1 + alpha * gate) * high_raw
 
 ### 1.4 deep high skip 可能把粗粒度背景残差送回 decoder
 
-Stage-3 / Stage-4 的 `high_hat` 经常变成大块背景区域响应，而不是局部小目标细节。深层 high skip 的空间分辨率较低，容易把 coarse background residual 注入 decoder。
+Stage-3 / Stage-4 的 `high_hat` 经常变成大块背景区域响应，而不是局部小目标细节。当前 decoder 只接收 stage-1/2/3 high skip，stage-4 high_hat 不作为 decoder skip；stage-3 high skip 的空间分辨率较低，容易把 coarse background residual 注入 decoder。
 
 建议：
 
 - 默认只保留 Stage-1 / Stage-2 high skip；
-- Stage-3 / Stage-4 high skip 作为消融；
+- Stage-3 decoder high skip 作为消融，Stage-4 high_hat 仅作为诊断或 auxiliary head 监督对象；
 - 避免所有尺度都向 decoder 注入 high residual。
 
 ---
@@ -253,14 +253,14 @@ gate_mode: centered
 Stage-1 high skip
 Stage-2 high skip
 Stage-3 high skip
-Stage-4 high skip
+Stage-4 high_hat diagnostics only
 ```
 
 但可视化显示：
 
 - Stage-1 / Stage-2 high 更接近小目标局部细节；
 - Stage-3 / Stage-4 high 经常变成大块背景区域响应；
-- 深层 high skip 可能把 coarse background residual 送回 decoder。
+- 当前 decoder 只接收 stage-1/2/3 high skip，stage-4 high_hat 不作为 decoder skip；深层 stage-3 high skip 可能把 coarse background residual 送回 decoder。
 
 ---
 
@@ -279,7 +279,7 @@ model:
 1 -> 使用 Stage-1 shallow high skip
 2 -> 使用 Stage-2 MIRFD high_hat
 3 -> 使用 Stage-3 MIRFD high_hat
-4 -> 使用 Stage-4 MIRFD high_hat
+4 -> 不支持作为 decoder high skip；Stage-4 MIRFD high_hat 仅用于诊断或 auxiliary head
 ```
 
 推荐默认：
@@ -291,8 +291,8 @@ high_skip_stages: [1, 2]
 作为消融：
 
 ```yaml
-high_skip_stages: [1, 2, 3, 4]
-high_skip_stages: [2, 3, 4]
+high_skip_stages: [1, 2, 3]
+high_skip_stages: [2, 3]
 high_skip_stages: [1, 2]
 high_skip_stages: [2]
 high_skip_stages: []
@@ -311,7 +311,6 @@ self.high_skip_stages = set(high_skip_stages or [])
 forward 中：
 
 ```python
-h4 = b4["high_hat"] if (b4 is not None and 4 in self.high_skip_stages) else None
 h3 = b3["high_hat"] if (b3 is not None and 3 in self.high_skip_stages) else None
 h2 = b2["high_hat"] if (b2 is not None and 2 in self.high_skip_stages) else None
 
@@ -598,7 +597,7 @@ mirfd:
   gate_alpha_init: 1.0
   high_residual_mode: concat_proj
 model:
-  high_skip_stages: [1, 2, 3, 4]
+  high_skip_stages: [1, 2, 3]
 loss:
   spectral_low_weight: 0.0
   spectral_high_weight: 0.0
@@ -621,7 +620,7 @@ loss:
   spectral_high_weight: 0.0
 ```
 
-目的：只验证关闭 S3/S4 high skip 是否减少背景污染。
+目的：只验证关闭 stage-3 decoder high skip 是否减少背景污染；stage-4 high_hat 当前不作为 decoder skip 使用。
 
 ---
 
@@ -687,7 +686,7 @@ loss:
 - [ ] 在 `MIRFDBlock._apply_gate()` 中新增 `gate_mode="centered"`。
 - [ ] 支持 `gate_scale_min` 和 `gate_scale_max`，或在 centered 模式中固定 clamp 到 `[0.25, 1.75]`。
 - [ ] 在 config 中新增 centered gate 配置。
-- [ ] 在 `MIRFDNet` 中新增 `high_skip_stages` 配置，支持 `[1,2]`、`[1,2,3,4]` 等。
+- [ ] 在 `MIRFDNet` 中新增 `high_skip_stages` 配置，支持 `[1,2]`、`[1,2,3]` 等；stage-4 当前不允许作为 decoder high skip。
 - [ ] 保证 decoder 在某个 high skip 不启用时仍能正常 forward。
 - [ ] 新增 `high_residual_mode="add_scaled"`。
 - [ ] 新增 `hfe_scale_init`。
@@ -732,14 +731,14 @@ GateModulation(gate, high_raw) = [1 + alpha · (gate - 0.5)] · high_raw
 ```text
 residual/high_raw 方向是对的；
 high_hat 的 gate 调制过强、过宽泛；
-深层 high skip 可能把 coarse background residual 注入 decoder。
+stage-3 decoder high skip 可能把 coarse background residual 注入 decoder；stage-4 high_hat 当前只做诊断/auxiliary supervision。
 ```
 
 因此下一步不应继续简单增强 high branch，而应该让 high branch 更 selective：
 
 ```text
 centered gate 负责选择性增强/抑制；
-high_skip_stages 控制哪些尺度的 high residual 进入 decoder；
+high_skip_stages 控制 stage-1/2/3 中哪些 high residual 进入 decoder；
 add_scaled HFE 保留 residual 的原始含义。
 ```
 

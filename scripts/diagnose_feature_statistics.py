@@ -27,6 +27,8 @@ RAW_FIELDNAMES = [
     "dataset",
     "sample_id",
     "stage",
+    "stage_enabled",
+    "stage_used_as_decoder_skip",
     "R_high_low",
     "R_high_residual",
     "R_high_high_raw",
@@ -42,6 +44,8 @@ RAW_FIELDNAMES = [
 ]
 
 SUMMARY_METRICS = [
+    "stage_enabled",
+    "stage_used_as_decoder_skip",
     "R_high_low",
     "R_high_residual",
     "R_high_high_raw",
@@ -340,6 +344,23 @@ def sample_id_from_batch(batch: dict[str, Any], batch_index: int, global_index: 
     return f"sample_{global_index:06d}"
 
 
+def stage_metadata(model: torch.nn.Module, stage: int) -> tuple[int, int]:
+    high_skip_stages = set(getattr(model, "high_skip_stages", set()))
+    use_high_residual_skip = bool(getattr(model, "use_high_residual_skip", True))
+    if stage == 1:
+        stage_enabled = int(stage in high_skip_stages)
+    elif stage in {2, 3, 4}:
+        stage_enabled = 1
+    else:
+        stage_enabled = 0
+    stage_used_as_decoder_skip = int(
+        use_high_residual_skip
+        and stage in high_skip_stages
+        and stage in {1, 2, 3}
+    )
+    return stage_enabled, stage_used_as_decoder_skip
+
+
 def write_raw_csv(rows: list[dict[str, Any]], output_csv: Path) -> None:
     ensure_dir(output_csv.parent)
     with output_csv.open("w", newline="", encoding="utf-8") as handle:
@@ -442,6 +463,7 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                 )
 
                 for stage, stage_index in stage_specs:
+                    stage_enabled, stage_used_as_decoder_skip = stage_metadata(model, stage)
                     if stage_index is None:
                         low = _sample_feature(_feature_at(features, "stage1_low", 0, warned_keys), batch_index)
                         residual = _sample_feature(_feature_at(features, "stage1_residual", 0, warned_keys), batch_index)
@@ -476,6 +498,8 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                             "dataset": args.dataset_name,
                             "sample_id": sample_id,
                             "stage": stage,
+                            "stage_enabled": stage_enabled,
+                            "stage_used_as_decoder_skip": stage_used_as_decoder_skip,
                             "R_high_low": fft_high_ratio(low, args.fft_radius_ratio),
                             "R_high_residual": fft_high_ratio(residual, args.fft_radius_ratio),
                             "R_high_high_raw": fft_high_ratio(high_raw, args.fft_radius_ratio),
@@ -516,8 +540,11 @@ def main() -> None:
         residual_high = _format_csv_value(row.get("mean_R_high_residual", float("nan")))
         low_high = _format_csv_value(row.get("mean_R_high_low", float("nan")))
         gate_delta = _format_csv_value(row.get("mean_gate_fg_minus_bg", float("nan")))
+        stage_enabled = _format_csv_value(row.get("mean_stage_enabled", float("nan")))
+        used_skip = _format_csv_value(row.get("mean_stage_used_as_decoder_skip", float("nan")))
         print(
             f"{dataset} stage-{stage}: "
+            f"stage_enabled={stage_enabled}, decoder_skip={used_skip}, "
             f"mean_iou={mean_iou}, fa_rate={fa_rate}, "
             f"R_high residual/low={residual_high}/{low_high}, "
             f"gate_fg_minus_bg={gate_delta}"

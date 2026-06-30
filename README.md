@@ -29,8 +29,9 @@ The v2 implementation keeps SS2D/VMamba-style modeling inside the MIRFD block, n
 - `model.mirfd.use_low_smooth`: applies lightweight low-pass calibration to the Mamba-induced low representation.
 - `model.mirfd.high_residual_mode`: `hfe`, `concat_proj`, `add`, or `add_scaled`; `add_scaled` uses `residual + gamma * HFE(residual)`.
 - `model.mirfd.gate_mode`: `suppress`, `enhance`, `half_enhance`, or `centered`; `centered` uses `(1 + alpha * (gate - 0.5)) * high_raw`.
-- `model.high_skip_stages`: selects which high responses enter decoder skips, e.g. `[1, 2]` for shallow high skip only.
+- `model.high_skip_stages`: selects which high responses enter decoder skips; currently only stages `{1, 2, 3}` are valid. Stage-4 `high_hat` is exposed for diagnostics and auxiliary heads, but is not a decoder skip unless bottleneck high injection is implemented.
 - `model.use_stage1_high_skip`: legacy switch for adding shallow high-frequency skip information when `high_skip_stages` is not set.
+- `model.use_aux_heads`: when enabled, auxiliary heads still supervise b2/b3/b4 `high_hat`; this is separate from whether a stage is used as a decoder high skip.
 - `loss.spectral_high_target`: chooses `residual`, `high_raw`, or `high_hat` for high-branch spectral regularization.
 - `loss.gate_aux_weight` / `loss.gate_bg_weight`: optional light supervision for gate target-awareness.
 

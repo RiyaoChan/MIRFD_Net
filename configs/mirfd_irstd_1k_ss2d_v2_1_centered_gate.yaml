@@ -72,7 +72,6 @@ model:
   - 1
   - 2
   - 3
-  - 4
 loss:
   bce_weight: 1.0
   dice_weight: 1.0

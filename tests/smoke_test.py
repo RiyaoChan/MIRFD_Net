@@ -71,6 +71,26 @@ def run_v2_config_smoke() -> None:
     loss, details = criterion(outputs, y)
     loss.backward()
     assert "spectral_high" in details
+
+    bad_stage_cfg = deepcopy(cfg)
+    bad_stage_cfg["model"]["high_skip_stages"] = [1, 2, 4]
+    try:
+        build_model(bad_stage_cfg)
+    except ValueError as exc:
+        assert "Stage 4 high_hat" in str(exc)
+    else:
+        raise AssertionError("high_skip_stages containing stage 4 should be rejected")
+
+    disabled_skip_cfg = deepcopy(cfg)
+    disabled_skip_cfg["model"]["decoder"]["use_high_residual_skip"] = False
+    disabled_skip_cfg["model"]["high_skip_stages"] = [1]
+    try:
+        build_model(disabled_skip_cfg)
+    except ValueError as exc:
+        assert "use_high_residual_skip=True" in str(exc)
+    else:
+        raise AssertionError("high_skip_stages should require decoder high residual skip")
+
     print("v2 config smoke ok", details)
 
 

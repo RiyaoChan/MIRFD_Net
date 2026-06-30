@@ -95,6 +95,8 @@ class SegHead(nn.Module):
 
 
 class MIRFDNet(nn.Module):
+    SUPPORTED_HIGH_SKIP_STAGES = {1, 2, 3}
+
     def __init__(
         self,
         in_channels: int = 1,
@@ -120,9 +122,19 @@ class MIRFDNet(nn.Module):
                 stages.add(1)
         else:
             stages = {int(stage) for stage in high_skip_stages}
-            invalid_stages = stages - {1, 2, 3, 4}
+            invalid_stages = stages - self.SUPPORTED_HIGH_SKIP_STAGES
             if invalid_stages:
-                raise ValueError(f"Unsupported high_skip_stages: {sorted(invalid_stages)}")
+                raise ValueError(
+                    f"Unsupported high_skip_stages: {sorted(invalid_stages)}. "
+                    "Only decoder high skip stages {1, 2, 3} are supported. "
+                    "Stage 4 high_hat is available for diagnostics and auxiliary heads, "
+                    "but it is not injected into the decoder unless bottleneck high injection is implemented."
+                )
+        if stages and not use_high_residual_skip:
+            raise ValueError(
+                "high_skip_stages requires decoder.use_high_residual_skip=True; "
+                f"got use_high_residual_skip=False with high_skip_stages={sorted(stages)}."
+            )
         self.high_skip_stages = stages
         self.use_stage1_high_skip = 1 in self.high_skip_stages
 
@@ -163,7 +175,7 @@ class MIRFDNet(nn.Module):
         return_dict: bool | None = None,
     ):
         input_size = x.shape[-2:]
-        collect = return_features or self.use_aux_heads or bool(self.high_skip_stages & {2, 3, 4})
+        collect = return_features or self.use_aux_heads or bool(self.high_skip_stages & {2, 3})
 
         e1 = self.stage1(self.stem(x))
         e2_in = self.down12(e1)
