@@ -483,3 +483,15 @@ loss:
 ### 11.2 内部特征统计脚本
 
 新增 `scripts/diagnose_feature_statistics.py`，建议将输出保存到 `docs/diagnostics/feature_statistics/`。该 CSV 用于量化 MIRFD 内部分支 `low/residual/high_raw/gate/high_hat` 的频谱属性、目标选择性和 false alarm 关系，重点验证 residual 是否更高频、HFE/gate 是否提升目标相关性，以及深层 high response / decoder skip 是否更容易引入背景残差。脚本同时统计 stage-1 的 `stage1_low/stage1_residual/stage1_high`；stage-1 没有 gate，因此 gate 相关字段写为 `nan`。`stage_enabled` 表示该 stage 的 high 分支是否有效，`stage_used_as_decoder_skip` 表示该 stage 是否真的进入 decoder，其中 stage-4 当前固定为 0。需要注意：`pred_iou` 和 `pred_has_false_alarm` 是样本级最终预测指标，会重复写入同一样本的各 stage 行，不是 stage 自身的输出指标。若 `use_aux_heads=True`，auxiliary heads 仍会监督 b2/b3/b4 的 `high_hat`，这与 decoder high skip 是否启用是两件事。
+
+### 11.3 v2.1 shallow high skip 内部特征统计（2026-06-30）
+
+已对三个数据集的 `v2_1_ablation/*_shallow_high_skip/best.pt` 生成测试集内部特征统计：
+
+| Dataset | Raw CSV | Summary CSV | Samples |
+|---|---|---|---:|
+| NUAA-SIRST | `docs/diagnostics/feature_statistics/nuaa_v2_1_shallow_high_skip.csv` | `docs/diagnostics/feature_statistics/summary_nuaa_v2_1_shallow_high_skip.csv` | 214 |
+| NUDT-SIRST | `docs/diagnostics/feature_statistics/nudt_v2_1_shallow_high_skip.csv` | `docs/diagnostics/feature_statistics/summary_nudt_v2_1_shallow_high_skip.csv` | 664 |
+| IRSTD-1K | `docs/diagnostics/feature_statistics/irstd_v2_1_shallow_high_skip.csv` | `docs/diagnostics/feature_statistics/summary_irstd_v2_1_shallow_high_skip.csv` | 201 |
+
+本轮配置为 `high_skip_stages: [1, 2]`，因此 summary 中 stage-1/2 的 `stage_used_as_decoder_skip=1`，stage-3/4 为 0；stage-4 high_hat 仅用于诊断和 auxiliary head 监督，不作为 decoder skip。
