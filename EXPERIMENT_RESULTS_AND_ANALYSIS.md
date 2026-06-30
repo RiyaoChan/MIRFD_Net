@@ -1,6 +1,7 @@
 # MIRFD-Net 实验结果与模型分析记录
 
 记录时间：2026-06-29  
+最近更新：2026-06-30
 服务器路径：`/DATA20T/bip/cry/code/MIRFD_Net`  
 数据集根目录：`/DATA20T/bip/cry/code/SIRST-5K-main/dataset/`
 
@@ -14,7 +15,7 @@
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | NUAA-SIRST | `nuaa_sirst_ss2d_sctrans_adamw_lr1e3` | `configs/mirfd_nuaa_sirst_ss2d_sctrans_adamw_lr1e3.yaml` | 374 | 0.7452 | 0.7184 | 0.8540 | 0.8443 | 0.8639 | 0.9696 | 0.000017 | +0.0320 IoU |
 | NUDT-SIRST | `nudt_sirst_ss2d_sctrans_adamw_bs32_lr1e3` | `configs/mirfd_nudt_sirst_ss2d_sctrans_adamw_bs32_lr1e3.yaml` | 441 | 0.8696 | 0.8926 | 0.9302 | 0.9329 | 0.9276 | 0.9799 | 0.000011 | +0.0718 IoU |
-| IRSTD-1K | `irstd_1k_ss2d_sctrans_adamw_bs32_lr1e3` | `configs/mirfd_irstd_1k_ss2d_sctrans_adamw_bs32_lr1e3.yaml` | 398 | 0.6025 | 0.5269 | 0.7519 | 0.6777 | 0.8444 | 0.8605 | 0.000026 | +0.0086 IoU |
+| IRSTD-1K | `v2_ablation/irstd_v2_no_spectral` | `configs/mirfd_irstd_1k_ss2d_v2_no_spectral.yaml` | 160 | 0.6129 | 0.5311 | 0.7600 | 0.6965 | 0.8364 | 0.8571 | 0.000018 | +0.0190 IoU |
 
 对应 checkpoint：
 
@@ -22,7 +23,7 @@
 |---|---|
 | NUAA-SIRST | `runs/nuaa_sirst_ss2d_sctrans_adamw_lr1e3/best.pt` |
 | NUDT-SIRST | `runs/nudt_sirst_ss2d_sctrans_adamw_bs32_lr1e3/best.pt` |
-| IRSTD-1K | `runs/irstd_1k_ss2d_sctrans_adamw_bs32_lr1e3/best.pt` |
+| IRSTD-1K | `runs/v2_ablation/irstd_v2_no_spectral/best.pt` |
 
 ## 2. 与原始实验对比
 
@@ -38,8 +39,30 @@
 | NUDT-SIRST | `nudt_sirst_ss2d_sctrans_adamw_bs32_lr3e3` | 500 | 491 | 0.8473 | 0.8666 | 0.9174 | 0.9778 | 0.000013 | lr=0.003，不如 lr=0.001 |
 | IRSTD-1K | `irstd_1k_ss2d` | 300 | 91 | 0.5939 | 0.5717 | 0.7452 | 0.8946 | 0.000100 | 原 SS2D 策略 |
 | IRSTD-1K | `irstd_1k_fallback` | 300 | 198 | 0.5916 | 0.5606 | 0.7434 | 0.9150 | 0.000100 | fallback Mamba |
-| IRSTD-1K | `irstd_1k_ss2d_sctrans_adamw_bs32_lr1e3` | 500 | 398 | 0.6025 | 0.5269 | 0.7519 | 0.8605 | 0.000026 | 当前最佳，但提升有限 |
+| IRSTD-1K | `irstd_1k_ss2d_sctrans_adamw_bs32_lr1e3` | 500 | 398 | 0.6025 | 0.5269 | 0.7519 | 0.8605 | 0.000026 | 旧最佳，但提升有限 |
 | IRSTD-1K | `irstd_1k_ss2d_sctrans_adamw_bs32_lr3e3` | 500 | 63 | 0.5437 | 0.4645 | 0.7044 | 0.7891 | 0.000044 | epoch 67 后 NaN |
+
+## 2.1 MIRFD-Net v2 spectral ablation 结果（2026-06-30）
+
+本轮实验固定 v2 结构，只对比 `spectral_low_weight/spectral_high_weight=0.001` 与关闭 spectral loss，目的是区分收益来自结构还是来自频谱约束。三组数据集均单独训练 500 epoch，输出目录为 `runs/v2_ablation/`。
+
+| Dataset | Run | Spectral | Best IoU epoch | IoU | nIoU | Dice | Best Pd-Fa | Compared with previous best IoU |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| NUAA-SIRST | `v2_ablation/nuaa_v2_spectral` | yes | 255 | 0.7209 | 0.7116 | 0.8378 | 0.9696 | -0.0243 |
+| NUAA-SIRST | `v2_ablation/nuaa_v2_no_spectral` | no | 220 | 0.7150 | 0.7041 | 0.8338 | 0.9733 | -0.0302 |
+| NUDT-SIRST | `v2_ablation/nudt_v2_spectral` | yes | 368 | 0.8349 | 0.8557 | 0.9100 | 0.9873 | -0.0347 |
+| NUDT-SIRST | `v2_ablation/nudt_v2_no_spectral` | no | 462 | 0.8607 | 0.8800 | 0.9251 | 0.9820 | -0.0089 |
+| IRSTD-1K | `v2_ablation/irstd_v2_spectral` | yes | 351 | 0.6029 | 0.5494 | 0.7523 | 0.9147 | +0.0004 |
+| IRSTD-1K | `v2_ablation/irstd_v2_no_spectral` | no | 160 | 0.6129 | 0.5311 | 0.7600 | 0.9217 | +0.0104 |
+
+表中 IoU/nIoU/Dice 是 best-IoU checkpoint 同一 epoch 的指标；`Best Pd-Fa` 为该 run 内 `pd - fa` 的最佳值，可能来自不同 epoch。
+
+对比结论：
+
+1. 相比上一轮 SCTransNet-style 最佳结果，v2 在 NUAA-SIRST 和 NUDT-SIRST 上没有提升；NUAA 最优从 `0.7452` 降到 `0.7209`，NUDT 最优从 `0.8696` 降到 `0.8607`。
+2. IRSTD-1K 有提升，最佳从 `0.6025` 提升到 `0.6129`，提升来自 v2 结构本身的 no-spectral 版本。
+3. spectral loss 不是稳定正收益：NUAA spectral 比 no-spectral 高 `+0.0059` IoU，但 NUDT 低 `-0.0258`，IRSTD-1K 低 `-0.0100`。
+4. 当前证据支持“v2 结构对 IRSTD 更有帮助，但 spectral 约束会在 NUDT/IRSTD 上损害分割 IoU/Dice”。后续主实验应优先保留 v2 结构、默认关闭 spectral loss，只把 spectral 作为诊断或弱权重消融。
 
 ## 3. 训练异常记录
 
