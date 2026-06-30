@@ -57,7 +57,7 @@ def run_v2_config_smoke() -> None:
 
     outputs = model(x, return_features=True)
     assert outputs["logits"].shape == (2, 1, 64, 64)
-    for key in ("low", "residual", "high_raw", "high_hat", "gate"):
+    for key in ("low0", "low", "residual", "high_raw", "high_hat", "gate"):
         assert key in outputs["features"]
 
     criterion = MIRFDLoss(**cfg["loss"])

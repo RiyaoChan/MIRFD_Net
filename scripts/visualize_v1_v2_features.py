@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         default="compare",
         help=(
             "compare: V1/V2 low and high_hat heatmaps; "
-            "v2-diagnostic: V2 low/residual/high_raw/gate/high_hat; "
+            "v2-diagnostic: V2 structure and FFT diagnostics; "
             "both: write both outputs."
         ),
     )
@@ -88,6 +88,22 @@ def label_panel(panel: np.ndarray, label: str) -> np.ndarray:
     return panel
 
 
+def label_strip(labels: list[str], cell_size: int, height: int = 28) -> np.ndarray:
+    strip = np.zeros((height, cell_size * len(labels), 3), dtype=np.uint8)
+    for index, label in enumerate(labels):
+        cv2.putText(
+            strip,
+            label,
+            (index * cell_size + 5, min(20, height - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+    return strip
+
+
 def to_bgr_gray(x: np.ndarray, size: int, label: str) -> np.ndarray:
     gray = normalize_uint8(x)
     bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
@@ -109,6 +125,12 @@ def tensor_response(feat: torch.Tensor, batch_index: int) -> np.ndarray:
 def gate_response(feat: torch.Tensor, batch_index: int) -> np.ndarray:
     resp = feat[batch_index].detach().float().mean(dim=0).cpu().numpy()
     return resp
+
+
+def fft_response(feat: torch.Tensor, batch_index: int) -> np.ndarray:
+    sample = feat[batch_index].detach().float()
+    spectrum = torch.fft.fftshift(torch.fft.fft2(sample, dim=(-2, -1)), dim=(-2, -1)).abs()
+    return torch.log1p(spectrum).mean(dim=0).cpu().numpy()
 
 
 def feature_at(features: dict, key: str, stage_index: int) -> torch.Tensor:
@@ -218,7 +240,8 @@ def render_v2_diagnostic_sample(
                 to_bgr_gray(raw, cell_size, f"{title} | input"),
                 to_bgr_gray(gt, cell_size, "GT"),
                 to_heatmap(pred_v2, cell_size, "V2 pred"),
-                label_panel(blank, "V2 comps"),
+                label_panel(blank, "structure"),
+                label_panel(blank, "FFT"),
                 label_panel(blank, "abs/gate mean"),
             ],
             axis=1,
@@ -227,22 +250,54 @@ def render_v2_diagnostic_sample(
 
     feats_v2 = outputs_v2["features"]
     for stage_index, stage_name in enumerate(("S2", "S3", "S4")):
+        low0 = tensor_response(feature_at(feats_v2, "low0", stage_index), batch_index)
         low = tensor_response(feature_at(feats_v2, "low", stage_index), batch_index)
         residual = tensor_response(feature_at(feats_v2, "residual", stage_index), batch_index)
         high_raw = tensor_response(feature_at(feats_v2, "high_raw", stage_index), batch_index)
         gate = gate_response(feature_at(feats_v2, "gate", stage_index), batch_index)
         high_hat = tensor_response(feature_at(feats_v2, "high_hat", stage_index), batch_index)
 
+        low_values = np.concatenate([low0.reshape(-1), low.reshape(-1)])
         high_values = np.concatenate([residual.reshape(-1), high_raw.reshape(-1), high_hat.reshape(-1)])
+        low_min, low_max = float(np.percentile(low_values, 1.0)), float(np.percentile(low_values, 99.0))
         high_min, high_max = float(np.percentile(high_values, 1.0)), float(np.percentile(high_values, 99.0))
         rows.append(
             np.concatenate(
                 [
-                    to_heatmap(low, cell_size, f"V2 {stage_name} low"),
+                    to_heatmap(low0, cell_size, f"V2 {stage_name} low0", low_min, low_max),
+                    to_heatmap(low, cell_size, f"V2 {stage_name} low", low_min, low_max),
                     to_heatmap(residual, cell_size, f"V2 {stage_name} residual", high_min, high_max),
                     to_heatmap(high_raw, cell_size, f"V2 {stage_name} high_raw", high_min, high_max),
-                    to_heatmap(gate, cell_size, f"V2 {stage_name} gate"),
+                    to_heatmap(gate, cell_size, f"V2 {stage_name} gate", 0.0, 1.0),
                     to_heatmap(high_hat, cell_size, f"V2 {stage_name} high_hat", high_min, high_max),
+                ],
+                axis=1,
+            )
+        )
+    rows.append(
+        label_strip(
+            ["FFT diagnostics", "FFT low", "FFT residual", "FFT high_raw", "FFT high_hat", "log magnitude"],
+            cell_size,
+        )
+    )
+    for stage_index, stage_name in enumerate(("S2", "S3", "S4")):
+        fft_low = fft_response(feature_at(feats_v2, "low", stage_index), batch_index)
+        fft_residual = fft_response(feature_at(feats_v2, "residual", stage_index), batch_index)
+        fft_high_raw = fft_response(feature_at(feats_v2, "high_raw", stage_index), batch_index)
+        fft_high_hat = fft_response(feature_at(feats_v2, "high_hat", stage_index), batch_index)
+        fft_values = np.concatenate(
+            [fft_low.reshape(-1), fft_residual.reshape(-1), fft_high_raw.reshape(-1), fft_high_hat.reshape(-1)]
+        )
+        fft_min, fft_max = float(np.percentile(fft_values, 1.0)), float(np.percentile(fft_values, 99.0))
+        rows.append(
+            np.concatenate(
+                [
+                    label_panel(blank, f"V2 {stage_name} FFT"),
+                    to_heatmap(fft_low, cell_size, f"FFT low", fft_min, fft_max),
+                    to_heatmap(fft_residual, cell_size, f"FFT residual", fft_min, fft_max),
+                    to_heatmap(fft_high_raw, cell_size, f"FFT high_raw", fft_min, fft_max),
+                    to_heatmap(fft_high_hat, cell_size, f"FFT high_hat", fft_min, fft_max),
+                    label_panel(blank, stage_name),
                 ],
                 axis=1,
             )
