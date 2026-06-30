@@ -15,7 +15,7 @@
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | NUAA-SIRST | `nuaa_sirst_ss2d_sctrans_adamw_lr1e3` | `configs/mirfd_nuaa_sirst_ss2d_sctrans_adamw_lr1e3.yaml` | 374 | 0.7452 | 0.7184 | 0.8540 | 0.8443 | 0.8639 | 0.9696 | 0.000017 | +0.0320 IoU |
 | NUDT-SIRST | `nudt_sirst_ss2d_sctrans_adamw_bs32_lr1e3` | `configs/mirfd_nudt_sirst_ss2d_sctrans_adamw_bs32_lr1e3.yaml` | 441 | 0.8696 | 0.8926 | 0.9302 | 0.9329 | 0.9276 | 0.9799 | 0.000011 | +0.0718 IoU |
-| IRSTD-1K | `v2_ablation/irstd_v2_no_spectral` | `configs/mirfd_irstd_1k_ss2d_v2_no_spectral.yaml` | 160 | 0.6129 | 0.5311 | 0.7600 | 0.6965 | 0.8364 | 0.8571 | 0.000018 | +0.0190 IoU |
+| IRSTD-1K | `v2_1_ablation/irstd_shallow_high_skip` | `configs/mirfd_irstd_1k_ss2d_v2_1_shallow_high_skip.yaml` | 340 | 0.6290 | 0.5392 | 0.7723 | 0.7137 | 0.8413 | 0.8469 | 0.000011 | +0.0265 IoU |
 
 对应 checkpoint：
 
@@ -23,7 +23,7 @@
 |---|---|
 | NUAA-SIRST | `runs/nuaa_sirst_ss2d_sctrans_adamw_lr1e3/best.pt` |
 | NUDT-SIRST | `runs/nudt_sirst_ss2d_sctrans_adamw_bs32_lr1e3/best.pt` |
-| IRSTD-1K | `runs/v2_ablation/irstd_v2_no_spectral/best.pt` |
+| IRSTD-1K | `runs/v2_1_ablation/irstd_shallow_high_skip/best.pt` |
 
 ## 2. 与原始实验对比
 
@@ -73,6 +73,7 @@
 | `irstd_1k_ss2d_sctrans_adamw_bs32_lr3e3` | 67 | lr=0.003 在 IRSTD-1K 上不稳定 |
 | `nuaa_sirst_ss2d_sctrans_adamw_bs8` | 64 | batch size 8 + lr=0.003 不稳定，且效果不如 lr=0.001 |
 | `sirst5k_three_fallback` | 45 | 混合数据集旧实验，不作为主要结论 |
+| `v2_1_ablation/irstd_centered_shallow_add_scaled` | 249 | `add_scaled` 在 IRSTD-1K 上后期出现 non-finite loss；可参考 NaN 前 `best.pt`，但不建议作为主配置 |
 
 当前训练脚本没有在 loss 出现 NaN 时自动中止，因此 NaN 后仍会继续保存 `last.pt`。后续应在 `scripts/train.py` 中加入有限值检查：
 
@@ -430,3 +431,51 @@ loss:
 ```
 
 如果 C/D 的可视化仍显示 gate 对背景大面积发亮，再开启 `gate_bg_weight: 0.01` 做第二轮。
+
+### 11.1 v2.1 实验结果（2026-06-30）
+
+12 组 v2.1 消融已经在服务器跑完，输出目录为 `runs/v2_1_ablation/`。除 `irstd_centered_shallow_add_scaled` 在 epoch 249 出现 NaN 外，其余实验均完成 500 epoch；失败组仍保留 NaN 前的 `best.pt`，best-IoU epoch 为 235。
+
+| Dataset | Run | Best epoch | IoU | nIoU | Dice | Precision | Recall | Pd | Fa | Status |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| NUAA-SIRST | `nuaa_centered_gate` | 367 | 0.7028 | 0.6985 | 0.8254 | 0.8308 | 0.8201 | 0.9544 | 0.000032 | 完成 |
+| NUAA-SIRST | `nuaa_shallow_high_skip` | 259 | 0.7267 | 0.7127 | 0.8417 | 0.8394 | 0.8441 | 0.9582 | 0.000024 | 完成 |
+| NUAA-SIRST | `nuaa_centered_shallow` | 196 | 0.6966 | 0.6910 | 0.8212 | 0.8291 | 0.8134 | 0.9430 | 0.000029 | 完成 |
+| NUAA-SIRST | `nuaa_centered_shallow_add_scaled` | 182 | 0.7211 | 0.7048 | 0.8379 | 0.8328 | 0.8431 | 0.9658 | 0.000026 | 完成 |
+| NUDT-SIRST | `nudt_centered_gate` | 451 | 0.8341 | 0.8542 | 0.9095 | 0.9126 | 0.9065 | 0.9757 | 0.000015 | 完成 |
+| NUDT-SIRST | `nudt_shallow_high_skip` | 378 | 0.8618 | 0.8826 | 0.9257 | 0.9279 | 0.9236 | 0.9788 | 0.000013 | 完成 |
+| NUDT-SIRST | `nudt_centered_shallow` | 479 | 0.8539 | 0.8700 | 0.9212 | 0.9322 | 0.9105 | 0.9788 | 0.000008 | 完成 |
+| NUDT-SIRST | `nudt_centered_shallow_add_scaled` | 363 | 0.8156 | 0.8328 | 0.8984 | 0.9002 | 0.8967 | 0.9746 | 0.000011 | 完成 |
+| IRSTD-1K | `irstd_centered_gate` | 300 | 0.6091 | 0.5245 | 0.7570 | 0.6907 | 0.8375 | 0.8367 | 0.000014 | 完成 |
+| IRSTD-1K | `irstd_shallow_high_skip` | 340 | 0.6290 | 0.5392 | 0.7723 | 0.7137 | 0.8413 | 0.8469 | 0.000011 | 完成 |
+| IRSTD-1K | `irstd_centered_shallow` | 374 | 0.5972 | 0.5442 | 0.7478 | 0.6642 | 0.8554 | 0.8707 | 0.000050 | 完成 |
+| IRSTD-1K | `irstd_centered_shallow_add_scaled` | 235 | 0.5947 | 0.5081 | 0.7458 | 0.6688 | 0.8430 | 0.8435 | 0.000031 | epoch 249 NaN |
+
+与上一轮 v2 no-spectral 对比：
+
+| Dataset | v2 no-spectral IoU | Best v2.1 run | Best v2.1 IoU | Change |
+|---|---:|---|---:|---:|
+| NUAA-SIRST | 0.7150 | `nuaa_shallow_high_skip` | 0.7267 | +0.0117 |
+| NUDT-SIRST | 0.8607 | `nudt_shallow_high_skip` | 0.8618 | +0.0011 |
+| IRSTD-1K | 0.6129 | `irstd_shallow_high_skip` | 0.6290 | +0.0161 |
+
+与当前全局最佳对比：
+
+| Dataset | Current global best before v2.1 | Best v2.1 | Conclusion |
+|---|---:|---:|---|
+| NUAA-SIRST | 0.7452 | 0.7267 | v2.1 仍低 0.0185，暂不替换 NUAA 主配置 |
+| NUDT-SIRST | 0.8696 | 0.8618 | v2.1 仍低 0.0078，暂不替换 NUDT 主配置 |
+| IRSTD-1K | 0.6129 | 0.6290 | v2.1 提升 0.0161，刷新 IRSTD 当前最佳 |
+
+结论：
+
+1. `shallow_high_skip` 是这一轮唯一稳定有效的结构改动，三个数据集相对 v2 no-spectral 均不下降，并在 IRSTD-1K 上带来明确提升。
+2. `centered_gate` 单独使用不稳定，NUAA、NUDT、IRSTD 均低于对应的 `shallow_high_skip`，说明 centered gate 没有直接解决 high response 背景扩散问题。
+3. `centered + shallow` 仍弱于 shallow-only，说明当前 gate 的调制方式可能仍会干扰目标高频细节，不建议作为默认主配置。
+4. `add_scaled` 没有带来稳定收益，且 IRSTD-1K 出现 NaN，暂不作为主实验路线。
+5. 后续主配置建议保留：
+   - `configs/mirfd_nuaa_sirst_ss2d_v2_1_shallow_high_skip.yaml`
+   - `configs/mirfd_nudt_sirst_ss2d_v2_1_shallow_high_skip.yaml`
+   - `configs/mirfd_irstd_1k_ss2d_v2_1_shallow_high_skip.yaml`
+
+当前最佳结果表已同步更新：IRSTD-1K 的全局最佳从 `v2_ablation/irstd_v2_no_spectral` 替换为 `v2_1_ablation/irstd_shallow_high_skip`；NUAA-SIRST 和 NUDT-SIRST 仍沿用 SCTransNet-style AdamW 最佳配置。
