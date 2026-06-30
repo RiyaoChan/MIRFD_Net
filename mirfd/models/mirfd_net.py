@@ -128,7 +128,7 @@ class MIRFDNet(nn.Module):
 
         self.stem = ConvNormAct(in_channels, dims[0], kernel_size=3, stride=2, norm=norm)
         self.stage1 = ConvStage(dims[0], depths[0], norm=norm)
-        if use_stage1_high_skip:
+        if self.use_stage1_high_skip:
             self.stage1_blur = FixedDepthwiseBlur(dims[0])
             self.stage1_hfe = HighFrequencyEnhancer(dims[0], norm=norm)
         else:

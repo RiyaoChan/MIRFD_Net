@@ -482,4 +482,4 @@ loss:
 
 ### 11.2 内部特征统计脚本
 
-新增 `scripts/diagnose_feature_statistics.py`，建议将输出保存到 `docs/diagnostics/feature_statistics/`。该 CSV 用于量化 MIRFD 内部分支 `low/residual/high_raw/gate/high_hat` 的频谱属性、目标选择性和 false alarm 关系，重点验证 residual 是否更高频、HFE/gate 是否提升目标相关性，以及 deep high skip 是否更容易引入背景残差。
+新增 `scripts/diagnose_feature_statistics.py`，建议将输出保存到 `docs/diagnostics/feature_statistics/`。该 CSV 用于量化 MIRFD 内部分支 `low/residual/high_raw/gate/high_hat` 的频谱属性、目标选择性和 false alarm 关系，重点验证 residual 是否更高频、HFE/gate 是否提升目标相关性，以及 deep high skip 是否更容易引入背景残差。脚本同时统计 stage-1 的 `stage1_low/stage1_residual/stage1_high`；stage-1 没有 gate，因此 gate 相关字段写为 `nan`。需要注意：`pred_iou` 和 `pred_has_false_alarm` 是样本级最终预测指标，会重复写入同一样本的各 stage 行，不是 stage 自身的输出指标。

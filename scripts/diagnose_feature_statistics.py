@@ -168,6 +168,10 @@ def _feature_at(features: dict[str, Any], key: str, stage_index: int, warned_key
     return values[stage_index]
 
 
+def _has_stage1_features(features: dict[str, Any]) -> bool:
+    return any(key in features for key in ("stage1_low", "stage1_residual", "stage1_high"))
+
+
 def _stage_count(features: dict[str, Any]) -> int:
     counts = []
     for key in ("low", "residual", "high_raw", "high_hat", "high", "gate"):
@@ -414,10 +418,15 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                 warnings.warn("Model output does not contain features; no feature rows will be written.", stacklevel=2)
                 break
 
+            has_stage1 = _has_stage1_features(features)
             stage_count = min(_stage_count(features), len(stage_names))
-            if stage_count == 0:
+            if not has_stage1 and stage_count == 0:
                 warnings.warn("No stage features found; no feature rows will be written.", stacklevel=2)
                 break
+            stage_specs: list[tuple[int, int | None]] = []
+            if has_stage1:
+                stage_specs.append((1, None))
+            stage_specs.extend((stage_names[index], index) for index in range(stage_count))
 
             batch_size = images.shape[0]
             for batch_index in range(batch_size):
@@ -432,13 +441,19 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                     min_fa_area=args.min_fa_area,
                 )
 
-                for stage_index in range(stage_count):
-                    stage = stage_names[stage_index]
-                    low = _sample_feature(_feature_at(features, "low", stage_index, warned_keys), batch_index)
-                    residual = _sample_feature(_feature_at(features, "residual", stage_index, warned_keys), batch_index)
-                    high_raw = _sample_feature(_feature_at(features, "high_raw", stage_index, warned_keys), batch_index)
-                    high_hat = _sample_feature(_feature_at(features, "high_hat", stage_index, warned_keys), batch_index)
-                    gate = _sample_feature(_feature_at(features, "gate", stage_index, warned_keys), batch_index)
+                for stage, stage_index in stage_specs:
+                    if stage_index is None:
+                        low = _sample_feature(_feature_at(features, "stage1_low", 0, warned_keys), batch_index)
+                        residual = _sample_feature(_feature_at(features, "stage1_residual", 0, warned_keys), batch_index)
+                        high_raw = _sample_feature(_feature_at(features, "stage1_high", 0, warned_keys), batch_index)
+                        high_hat = high_raw
+                        gate = None
+                    else:
+                        low = _sample_feature(_feature_at(features, "low", stage_index, warned_keys), batch_index)
+                        residual = _sample_feature(_feature_at(features, "residual", stage_index, warned_keys), batch_index)
+                        high_raw = _sample_feature(_feature_at(features, "high_raw", stage_index, warned_keys), batch_index)
+                        high_hat = _sample_feature(_feature_at(features, "high_hat", stage_index, warned_keys), batch_index)
+                        gate = _sample_feature(_feature_at(features, "gate", stage_index, warned_keys), batch_index)
 
                     low_fg_bg, _, _, fg_count, _ = fg_bg_stats(low, sample_mask, is_gate=False)
                     if low is not None and fg_count == 0:
@@ -450,7 +465,11 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                     residual_fg_bg, _, _, _, _ = fg_bg_stats(residual, sample_mask, is_gate=False)
                     high_raw_fg_bg, _, _, _, _ = fg_bg_stats(high_raw, sample_mask, is_gate=False)
                     high_hat_fg_bg, _, _, _, _ = fg_bg_stats(high_hat, sample_mask, is_gate=False)
-                    gate_fg_bg, gate_fg_minus_bg, _, _, _ = fg_bg_stats(gate, sample_mask, is_gate=True)
+                    if gate is None:
+                        gate_fg_bg = float("nan")
+                        gate_fg_minus_bg = float("nan")
+                    else:
+                        gate_fg_bg, gate_fg_minus_bg, _, _, _ = fg_bg_stats(gate, sample_mask, is_gate=True)
 
                     rows.append(
                         {
@@ -485,6 +504,10 @@ def main() -> None:
     output_csv, summary_csv, summary_rows = diagnose(args)
     print(f"Wrote raw feature statistics: {output_csv}")
     print(f"Wrote summary statistics: {summary_csv}")
+    print(
+        "Note: pred_iou and pred_has_false_alarm are sample-level final-prediction metrics; "
+        "they are repeated on stage rows and are not stage-specific outputs."
+    )
     for row in summary_rows:
         dataset = row["dataset"]
         stage = row["stage"]
