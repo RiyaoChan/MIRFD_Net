@@ -479,3 +479,7 @@ loss:
    - `configs/mirfd_irstd_1k_ss2d_v2_1_shallow_high_skip.yaml`
 
 当前最佳结果表已同步更新：IRSTD-1K 的全局最佳从 `v2_ablation/irstd_v2_no_spectral` 替换为 `v2_1_ablation/irstd_shallow_high_skip`；NUAA-SIRST 和 NUDT-SIRST 仍沿用 SCTransNet-style AdamW 最佳配置。
+
+### 11.2 内部特征统计脚本
+
+新增 `scripts/diagnose_feature_statistics.py`，建议将输出保存到 `docs/diagnostics/feature_statistics/`。该 CSV 用于量化 MIRFD 内部分支 `low/residual/high_raw/gate/high_hat` 的频谱属性、目标选择性和 false alarm 关系，重点验证 residual 是否更高频、HFE/gate 是否提升目标相关性，以及 deep high skip 是否更容易引入背景残差。
