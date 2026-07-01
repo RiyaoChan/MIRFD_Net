@@ -8,7 +8,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from .layers import ConvNormAct
-from .mirfd_block import FixedDepthwiseBlur, HighFrequencyEnhancer, MIRFDBlock
+from .mirfd_block import FixedDepthwiseBlur, MIRFDBlock, build_high_enhancer
 
 
 class ConvStage(nn.Module):
@@ -96,6 +96,7 @@ class SegHead(nn.Module):
 
 class MIRFDNet(nn.Module):
     SUPPORTED_HIGH_SKIP_STAGES = {1, 2, 3}
+    SUPPORTED_DECODER_HIGH_SOURCES = {"high_raw", "high_hat", "residual"}
 
     def __init__(
         self,
@@ -108,14 +109,21 @@ class MIRFDNet(nn.Module):
         use_high_residual_skip: bool = True,
         use_stage1_high_skip: bool = False,
         high_skip_stages: Iterable[int] | None = None,
+        decoder_high_source: str = "high_hat",
+        stage1_high_enhancer_type: str = "conv_hfe",
+        stage1_high_enhancer_kwargs: dict[str, Any] | None = None,
         use_aux_heads: bool = True,
         norm: str = "batch",
     ) -> None:
         super().__init__()
+        if decoder_high_source not in self.SUPPORTED_DECODER_HIGH_SOURCES:
+            raise ValueError(f"Unsupported decoder_high_source: {decoder_high_source}")
         dims = dims or (base_dim, base_dim * 2, base_dim * 4, base_dim * 8)
         block_kwargs = block_kwargs or {}
+        stage1_high_enhancer_kwargs = stage1_high_enhancer_kwargs or {}
         self.use_aux_heads = use_aux_heads
         self.use_high_residual_skip = use_high_residual_skip
+        self.decoder_high_source = decoder_high_source
         if high_skip_stages is None:
             stages = {2, 3} if use_high_residual_skip else set()
             if use_stage1_high_skip:
@@ -142,7 +150,12 @@ class MIRFDNet(nn.Module):
         self.stage1 = ConvStage(dims[0], depths[0], norm=norm)
         if self.use_stage1_high_skip:
             self.stage1_blur = FixedDepthwiseBlur(dims[0])
-            self.stage1_hfe = HighFrequencyEnhancer(dims[0], norm=norm)
+            self.stage1_hfe = build_high_enhancer(
+                stage1_high_enhancer_type,
+                dims[0],
+                norm=norm,
+                **stage1_high_enhancer_kwargs,
+            )
         else:
             self.stage1_blur = nn.Identity()
             self.stage1_hfe = nn.Identity()
@@ -168,6 +181,11 @@ class MIRFDNet(nn.Module):
         else:
             self.aux_heads = nn.ModuleList()
 
+    def _decoder_branch(self, branches: dict[str, torch.Tensor] | None) -> torch.Tensor | None:
+        if branches is None:
+            return None
+        return branches[self.decoder_high_source]
+
     def forward(
         self,
         x: torch.Tensor,
@@ -185,8 +203,8 @@ class MIRFDNet(nn.Module):
         e4_in = self.down34(e3)
         e4, b4 = self.stage4(e4_in, return_branches=True) if collect else (self.stage4(e4_in), None)
 
-        h3 = b3["high_hat"] if (b3 is not None and 3 in self.high_skip_stages) else None
-        h2 = b2["high_hat"] if (b2 is not None and 2 in self.high_skip_stages) else None
+        h3 = self._decoder_branch(b3) if (b3 is not None and 3 in self.high_skip_stages) else None
+        h2 = self._decoder_branch(b2) if (b2 is not None and 2 in self.high_skip_stages) else None
 
         d3 = self.dec3(e4, e3, h3)
         d2 = self.dec2(d3, e2, h2)
@@ -194,11 +212,13 @@ class MIRFDNet(nn.Module):
             e1_low = self.stage1_blur(e1)
             e1_residual = e1 - e1_low
             e1_high = self.stage1_hfe(e1_residual)
+            e1_decoder_high = e1_residual if self.decoder_high_source == "residual" else e1_high
         else:
             e1_low = e1
             e1_residual = torch.zeros_like(e1)
             e1_high = torch.zeros_like(e1)
-        d1 = self.dec1(d2, e1, e1_high)
+            e1_decoder_high = e1_high
+        d1 = self.dec1(d2, e1, e1_decoder_high)
         logits = self.head(d1)
         logits = F.interpolate(logits, size=input_size, mode="bilinear", align_corners=False)
 
@@ -246,6 +266,10 @@ def build_model(config: dict[str, Any] | None = None) -> MIRFDNet:
         "low_smooth_beta_init": mirfd_cfg.get("low_smooth_beta_init", 0.3),
         "high_residual_mode": mirfd_cfg.get("high_residual_mode", "hfe"),
         "hfe_scale_init": mirfd_cfg.get("hfe_scale_init", 0.1),
+        "high_enhancer_type": mirfd_cfg.get("high_enhancer_type", "conv_hfe"),
+        "fsre_num_bands": mirfd_cfg.get("fsre_num_bands", 4),
+        "fsre_window_size": mirfd_cfg.get("fsre_window_size", 8),
+        "fsre_gamma_init": mirfd_cfg.get("fsre_gamma_init", 0.1),
         "gate_mode": mirfd_cfg.get("gate_mode", "suppress"),
         "gate_alpha_init": mirfd_cfg.get("gate_alpha_init", 1.0),
         "gate_scale_min": mirfd_cfg.get("gate_scale_min", 0.25),
@@ -276,6 +300,12 @@ def build_model(config: dict[str, Any] | None = None) -> MIRFDNet:
 
     dims = model_cfg.get("dims")
     depths = model_cfg.get("depths", (1, 1, 2, 2))
+    stage1_high_enhancer_kwargs = {
+        "hfe_kernels": tuple(mirfd_cfg.get("hfe_kernels", (3, 5))),
+        "fsre_num_bands": mirfd_cfg.get("stage1_fsre_num_bands", mirfd_cfg.get("fsre_num_bands", 4)),
+        "fsre_window_size": mirfd_cfg.get("stage1_fsre_window_size", mirfd_cfg.get("fsre_window_size", 8)),
+        "fsre_gamma_init": mirfd_cfg.get("stage1_fsre_gamma_init", mirfd_cfg.get("fsre_gamma_init", 0.1)),
+    }
     return MIRFDNet(
         in_channels=model_cfg.get("in_channels", 1),
         num_classes=model_cfg.get("num_classes", 1),
@@ -286,6 +316,9 @@ def build_model(config: dict[str, Any] | None = None) -> MIRFDNet:
         use_high_residual_skip=decoder_cfg.get("use_high_residual_skip", True),
         use_stage1_high_skip=model_cfg.get("use_stage1_high_skip", decoder_cfg.get("use_stage1_high_skip", False)),
         high_skip_stages=model_cfg.get("high_skip_stages", decoder_cfg.get("high_skip_stages")),
+        decoder_high_source=model_cfg.get("decoder_high_source", decoder_cfg.get("decoder_high_source", "high_hat")),
+        stage1_high_enhancer_type=model_cfg.get("stage1_high_enhancer_type", "conv_hfe"),
+        stage1_high_enhancer_kwargs=stage1_high_enhancer_kwargs,
         use_aux_heads=model_cfg.get("use_aux_heads", True),
         norm=model_cfg.get("norm", "batch"),
     )

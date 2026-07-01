@@ -7,6 +7,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from .layers import ConvNormAct, make_norm
+from .frequency_enhancer import FrequencySelectiveResidualEnhancer
 from .ss2d import build_mamba_block
 
 
@@ -70,6 +71,30 @@ class TargetAwareGate(nn.Module):
         return self.gate(torch.cat([low, residual], dim=1))
 
 
+def build_high_enhancer(
+    enhancer_type: str,
+    dim: int,
+    hfe_kernels: Iterable[int] = (3, 5),
+    norm: str = "batch",
+    fsre_num_bands: int = 4,
+    fsre_window_size: int = 8,
+    fsre_gamma_init: float = 0.1,
+) -> nn.Module:
+    if enhancer_type == "identity":
+        return nn.Identity()
+    if enhancer_type == "conv_hfe":
+        return HighFrequencyEnhancer(dim, kernels=hfe_kernels, norm=norm)
+    if enhancer_type == "freq_window":
+        return FrequencySelectiveResidualEnhancer(
+            dim=dim,
+            num_bands=fsre_num_bands,
+            window_size=fsre_window_size,
+            gamma_init=fsre_gamma_init,
+            norm=norm,
+        )
+    raise ValueError(f"Unsupported high_enhancer_type: {enhancer_type}")
+
+
 class MIRFDBlock(nn.Module):
     """Mamba-induced residual frequency decoupling block."""
 
@@ -77,6 +102,7 @@ class MIRFDBlock(nn.Module):
     SUPPORTED_FUSIONS = {"concat", "residual_compensation"}
     SUPPORTED_HIGH_RESIDUAL_MODES = {"hfe", "concat_proj", "add", "add_scaled"}
     SUPPORTED_GATE_MODES = {"suppress", "enhance", "half_enhance", "centered"}
+    SUPPORTED_HIGH_ENHANCERS = {"identity", "conv_hfe", "freq_window"}
 
     def __init__(
         self,
@@ -94,6 +120,10 @@ class MIRFDBlock(nn.Module):
         low_smooth_beta_init: float = 0.3,
         high_residual_mode: str = "hfe",
         hfe_scale_init: float = 0.1,
+        high_enhancer_type: str = "conv_hfe",
+        fsre_num_bands: int = 4,
+        fsre_window_size: int = 8,
+        fsre_gamma_init: float = 0.1,
         gate_mode: str = "suppress",
         gate_alpha_init: float = 1.0,
         gate_scale_min: float = 0.25,
@@ -106,6 +136,8 @@ class MIRFDBlock(nn.Module):
             raise ValueError(f"Unsupported fusion: {fusion}")
         if high_residual_mode not in self.SUPPORTED_HIGH_RESIDUAL_MODES:
             raise ValueError(f"Unsupported high_residual_mode: {high_residual_mode}")
+        if high_enhancer_type not in self.SUPPORTED_HIGH_ENHANCERS:
+            raise ValueError(f"Unsupported high_enhancer_type: {high_enhancer_type}")
         if gate_mode not in self.SUPPORTED_GATE_MODES:
             raise ValueError(f"Unsupported gate_mode: {gate_mode}")
         if gate_scale_max <= gate_scale_min:
@@ -118,6 +150,7 @@ class MIRFDBlock(nn.Module):
         self.fusion = fusion
         self.use_gate = use_gate
         self.high_residual_mode = high_residual_mode
+        self.high_enhancer_type = high_enhancer_type
         self.gate_mode = gate_mode
         self.gate_scale_min = float(gate_scale_min)
         self.gate_scale_max = float(gate_scale_max)
@@ -128,7 +161,15 @@ class MIRFDBlock(nn.Module):
             make_norm(norm, dim),
         )
         self.low_smooth = LowSmooth(dim, beta_init=low_smooth_beta_init) if use_low_smooth else nn.Identity()
-        self.hfe = HighFrequencyEnhancer(dim, kernels=hfe_kernels, norm=norm)
+        self.hfe = build_high_enhancer(
+            high_enhancer_type,
+            dim,
+            hfe_kernels=hfe_kernels,
+            norm=norm,
+            fsre_num_bands=fsre_num_bands,
+            fsre_window_size=fsre_window_size,
+            fsre_gamma_init=fsre_gamma_init,
+        )
         self.high_proj = (
             ConvNormAct(dim * 2, dim, kernel_size=1, padding=0, norm=norm)
             if high_residual_mode == "concat_proj"
@@ -196,15 +237,15 @@ class MIRFDBlock(nn.Module):
         return low, low, residual
 
     def _high_branch(self, residual: torch.Tensor) -> torch.Tensor:
-        hfe_out = self.hfe(residual)
+        enhanced = self.hfe(residual)
         if self.high_residual_mode == "concat_proj":
-            return self.high_proj(torch.cat([residual, hfe_out], dim=1))
+            return self.high_proj(torch.cat([residual, enhanced], dim=1))
         if self.high_residual_mode == "add":
-            return residual + hfe_out
+            return residual + enhanced
         if self.high_residual_mode == "add_scaled":
             scale = torch.clamp(self.hfe_scale, 0.0, 1.0)
-            return residual + scale * hfe_out
-        return hfe_out
+            return residual + scale * enhanced
+        return enhanced
 
     def _apply_gate(self, high_raw: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
         if self.gate_mode == "suppress":

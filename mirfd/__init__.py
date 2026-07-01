@@ -1,6 +1,7 @@
 from .models import (
     MIRFDNet,
     MIRFDBlock,
+    FrequencySelectiveResidualEnhancer,
     HighFrequencyEnhancer,
     TargetAwareGate,
     Mamba2D,
@@ -14,6 +15,7 @@ from .models import (
 __all__ = [
     "MIRFDNet",
     "MIRFDBlock",
+    "FrequencySelectiveResidualEnhancer",
     "HighFrequencyEnhancer",
     "TargetAwareGate",
     "Mamba2D",

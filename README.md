@@ -28,8 +28,11 @@ The v2 implementation keeps SS2D/VMamba-style modeling inside the MIRFD block, n
 
 - `model.mirfd.use_low_smooth`: applies lightweight low-pass calibration to the Mamba-induced low representation.
 - `model.mirfd.high_residual_mode`: `hfe`, `concat_proj`, `add`, or `add_scaled`; `add_scaled` uses `residual + gamma * HFE(residual)`.
+- `model.mirfd.high_enhancer_type`: `identity`, `conv_hfe`, or `freq_window`; `freq_window` enables local-window Frequency-Selective Residual Enhancer (FSRE).
 - `model.mirfd.gate_mode`: `suppress`, `enhance`, `half_enhance`, or `centered`; `centered` uses `(1 + alpha * (gate - 0.5)) * high_raw`.
 - `model.high_skip_stages`: selects which high responses enter decoder skips; currently only stages `{1, 2, 3}` are valid. Stage-4 `high_hat` is exposed for diagnostics and auxiliary heads, but is not a decoder skip unless bottleneck high injection is implemented.
+- `model.decoder_high_source`: chooses which MIRFD branch enters decoder high skips: `high_raw`, `high_hat`, or `residual`.
+- `model.stage1_high_enhancer_type`: chooses the stage-1 high skip enhancer independently: `identity`, `conv_hfe`, or `freq_window`.
 - `model.use_stage1_high_skip`: legacy switch for adding shallow high-frequency skip information when `high_skip_stages` is not set.
 - `model.use_aux_heads`: when enabled, auxiliary heads still supervise b2/b3/b4 `high_hat`; this is separate from whether a stage is used as a decoder high skip.
 - `loss.spectral_high_target`: chooses `residual`, `high_raw`, or `high_hat` for high-branch spectral regularization.

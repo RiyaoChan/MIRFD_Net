@@ -495,3 +495,48 @@ loss:
 | IRSTD-1K | `docs/diagnostics/feature_statistics/irstd_v2_1_shallow_high_skip.csv` | `docs/diagnostics/feature_statistics/summary_irstd_v2_1_shallow_high_skip.csv` | 201 |
 
 本轮配置为 `high_skip_stages: [1, 2]`，因此 summary 中 stage-1/2 的 `stage_used_as_decoder_skip=1`，stage-3/4 为 0；stage-4 high_hat 仅用于诊断和 auxiliary head 监督，不作为 decoder skip。
+
+## 12. MIRFD-Net v2.2 FSRE 实验计划（2026-07-01）
+
+根据 `MIRFD_Net_v2_2_FSRE_frequency_selective_residual_enhancer_plan.md`，v2.2 的目标是把 high branch 从普通卷积 HFE 转向频率选择性残差增强。新增 `FrequencySelectiveResidualEnhancer`，在局部窗口 FFT 中按 radial bands 学习频带权重，并采用 residual-style 输出：
+
+```text
+R_freq = LocalBandFFT(R)
+high_raw = R + gamma * Proj(R_freq)
+```
+
+新增配置开关：
+
+| Switch | Meaning |
+|---|---|
+| `model.mirfd.high_enhancer_type` | `identity / conv_hfe / freq_window` |
+| `model.mirfd.fsre_num_bands` | FSRE radial frequency band 数，默认 4 |
+| `model.mirfd.fsre_window_size` | 局部 FFT window size，默认 8 |
+| `model.mirfd.fsre_gamma_init` | FSRE residual 增强初始缩放，默认 0.1 |
+| `model.stage1_high_enhancer_type` | stage-1 high skip 单独选择 `identity / conv_hfe / freq_window` |
+| `model.decoder_high_source` | decoder high skip 使用 `high_raw / high_hat / residual` |
+
+已新增四组 v2.2 配置，每组覆盖 NUAA-SIRST、NUDT-SIRST、IRSTD-1K：
+
+| Experiment | Key idea |
+|---|---|
+| `v2_2_identity_residual` | decoder 直接使用 residual，验证原始 residual 是否足够 |
+| `v2_2_conv_hfe_high_raw` | 普通 Conv-HFE 对照，但 decoder 使用 `high_raw` |
+| `v2_2_window_fsre` | stage-1 和 MIRFD stage 都使用 FSRE |
+| `v2_2_stage1_identity_stage2_fsre` | stage-1 保留原始 residual，stage-2 使用 FSRE；第一轮主推 |
+
+第一轮优先启动：
+
+```text
+configs/mirfd_nuaa_sirst_ss2d_v2_2_stage1_identity_stage2_fsre.yaml
+configs/mirfd_nudt_sirst_ss2d_v2_2_stage1_identity_stage2_fsre.yaml
+configs/mirfd_irstd_1k_ss2d_v2_2_stage1_identity_stage2_fsre.yaml
+```
+
+输出目录：
+
+```text
+runs/v2_2_ablation/nuaa_stage1_identity_stage2_fsre
+runs/v2_2_ablation/nudt_stage1_identity_stage2_fsre
+runs/v2_2_ablation/irstd_stage1_identity_stage2_fsre
+```
