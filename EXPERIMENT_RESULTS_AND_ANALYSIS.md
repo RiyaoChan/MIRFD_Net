@@ -1,7 +1,7 @@
 # MIRFD-Net 实验结果与模型分析记录
 
 记录时间：2026-06-29  
-最近更新：2026-06-30
+最近更新：2026-07-01
 服务器路径：`/DATA20T/bip/cry/code/MIRFD_Net`  
 数据集根目录：`/DATA20T/bip/cry/code/SIRST-5K-main/dataset/`
 
@@ -14,7 +14,7 @@
 | Dataset | Best run | Config | Best epoch | IoU | nIoU | Dice | Precision | Recall | Pd | Fa | Compared with previous SS2D |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | NUAA-SIRST | `nuaa_sirst_ss2d_sctrans_adamw_lr1e3` | `configs/mirfd_nuaa_sirst_ss2d_sctrans_adamw_lr1e3.yaml` | 374 | 0.7452 | 0.7184 | 0.8540 | 0.8443 | 0.8639 | 0.9696 | 0.000017 | +0.0320 IoU |
-| NUDT-SIRST | `nudt_sirst_ss2d_sctrans_adamw_bs32_lr1e3` | `configs/mirfd_nudt_sirst_ss2d_sctrans_adamw_bs32_lr1e3.yaml` | 441 | 0.8696 | 0.8926 | 0.9302 | 0.9329 | 0.9276 | 0.9799 | 0.000011 | +0.0718 IoU |
+| NUDT-SIRST | `v2_2_ablation/nudt_stage1_identity_stage2_fsre` | `configs/mirfd_nudt_sirst_ss2d_v2_2_stage1_identity_stage2_fsre.yaml` | 500 | 0.8756 | 0.8959 | 0.9337 | 0.9348 | 0.9325 | 0.9841 | 0.000010 | +0.0778 IoU |
 | IRSTD-1K | `v2_1_ablation/irstd_shallow_high_skip` | `configs/mirfd_irstd_1k_ss2d_v2_1_shallow_high_skip.yaml` | 340 | 0.6290 | 0.5392 | 0.7723 | 0.7137 | 0.8413 | 0.8469 | 0.000011 | +0.0265 IoU |
 
 对应 checkpoint：
@@ -22,7 +22,7 @@
 | Dataset | Best checkpoint |
 |---|---|
 | NUAA-SIRST | `runs/nuaa_sirst_ss2d_sctrans_adamw_lr1e3/best.pt` |
-| NUDT-SIRST | `runs/nudt_sirst_ss2d_sctrans_adamw_bs32_lr1e3/best.pt` |
+| NUDT-SIRST | `runs/v2_2_ablation/nudt_stage1_identity_stage2_fsre/best.pt` |
 | IRSTD-1K | `runs/v2_1_ablation/irstd_shallow_high_skip/best.pt` |
 
 ## 2. 与原始实验对比
@@ -562,3 +562,29 @@ runs/v2_2_ablation/irstd_stage1_identity_stage2_fsre
 | IRSTD-1K | 6 | 0.0194 | 0.0412 | 0.1735 | 0.005606 | restarted after cleaning a CRLF-tainted output directory |
 
 上述数值仅用于确认训练和验证循环正常运行，不能作为最终性能对比。最终比较仍以各 run 的 `best.pt` / `best_iou.pt` 和完整测试集评估为准。
+
+### 12.2 v2.2 第一轮完成结果（2026-07-01）
+
+三组 `v2_2_stage1_identity_stage2_fsre` 已完成 500 epoch。该组配置为 stage-1 identity residual、MIRFD stage 使用 FSRE、decoder high skip 使用 `high_raw`，训练策略沿用 SCTransNet-style preprocessing、AdamW、cosine warmup、关闭 spectral loss。
+
+| Dataset | Run | Best epoch | IoU | nIoU | Dice | Precision | Recall | Pd | Fa | Latest epoch IoU |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| NUAA-SIRST | `nuaa_stage1_identity_stage2_fsre` | 136 | 0.6900 | 0.6881 | 0.8165 | 0.7909 | 0.8439 | 0.9582 | 0.000054 | 0.6137 |
+| NUDT-SIRST | `nudt_stage1_identity_stage2_fsre` | 500 | 0.8756 | 0.8959 | 0.9337 | 0.9348 | 0.9325 | 0.9841 | 0.000010 | 0.8756 |
+| IRSTD-1K | `irstd_stage1_identity_stage2_fsre` | 338 | 0.5968 | 0.5440 | 0.7475 | 0.6714 | 0.8430 | 0.8503 | 0.000027 | 0.5452 |
+
+与上一轮 v2.1 shallow high skip / 当前全局最佳对比：
+
+| Dataset | v2.1 shallow IoU | Previous global best IoU | v2.2 FSRE IoU | vs v2.1 shallow | vs previous global best | Conclusion |
+|---|---:|---:|---:|---:|---:|---|
+| NUAA-SIRST | 0.7267 | 0.7452 | 0.6900 | -0.0367 | -0.0552 | 明显下降，不建议继续该结构作为 NUAA 主线 |
+| NUDT-SIRST | 0.8618 | 0.8696 | 0.8756 | +0.0138 | +0.0060 | 有效，刷新 NUDT 当前最佳 |
+| IRSTD-1K | 0.6290 | 0.6290 | 0.5968 | -0.0322 | -0.0322 | 下降，不如 v2.1 shallow |
+
+结论：
+
+1. FSRE 不是跨数据集稳定正收益；当前只在 NUDT-SIRST 上带来明确提升。
+2. NUDT-SIRST 的 best epoch 出现在 500，说明该结构在 NUDT 上仍有继续训练或微调学习率尾段的空间。
+3. NUAA-SIRST best 出现在 epoch 136，后续回落明显，说明 `stage1 identity + FSRE + high_raw` 可能引入了不稳定高频响应或过拟合。
+4. IRSTD-1K 虽然中后期达到 0.5968，但仍低于 v2.1 shallow 的 0.6290，暂不替换 IRSTD 主配置。
+5. 当前最佳结果表需要更新：NUDT-SIRST 的全局最佳从 `nudt_sirst_ss2d_sctrans_adamw_bs32_lr1e3` 替换为 `v2_2_ablation/nudt_stage1_identity_stage2_fsre`；NUAA-SIRST 和 IRSTD-1K 保持原最佳。
