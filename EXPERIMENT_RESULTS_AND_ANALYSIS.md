@@ -540,3 +540,25 @@ runs/v2_2_ablation/nuaa_stage1_identity_stage2_fsre
 runs/v2_2_ablation/nudt_stage1_identity_stage2_fsre
 runs/v2_2_ablation/irstd_stage1_identity_stage2_fsre
 ```
+
+### 12.1 v2.2 第一轮实验启动记录（2026-07-01）
+
+服务器项目路径：`/DATA20T/bip/cry/code/MIRFD_Net`。
+
+已启动三组单数据集训练，均使用 `v2_2_stage1_identity_stage2_fsre` 配置，即 stage-1 使用 identity residual、MIRFD stage 使用 FSRE、decoder high skip 使用 `high_raw`，并保持 `high_skip_stages: [1, 2]`。
+
+| Dataset | GPU | PID | Config | Output dir | Log |
+|---|---:|---:|---|---|---|
+| NUAA-SIRST | 0 | 2277341 | `configs/mirfd_nuaa_sirst_ss2d_v2_2_stage1_identity_stage2_fsre.yaml` | `runs/v2_2_ablation/nuaa_stage1_identity_stage2_fsre` | `runs/v2_2_ablation/logs/nuaa_stage1_identity_stage2_fsre.log` |
+| NUDT-SIRST | 1 | 2277345 | `configs/mirfd_nudt_sirst_ss2d_v2_2_stage1_identity_stage2_fsre.yaml` | `runs/v2_2_ablation/nudt_stage1_identity_stage2_fsre` | `runs/v2_2_ablation/logs/nudt_stage1_identity_stage2_fsre.log` |
+| IRSTD-1K | 2 | 2281979 | `configs/mirfd_irstd_1k_ss2d_v2_2_stage1_identity_stage2_fsre.yaml` | `runs/v2_2_ablation/irstd_stage1_identity_stage2_fsre` | `runs/v2_2_ablation/logs/irstd_stage1_identity_stage2_fsre.log` |
+
+启动检查：
+
+| Dataset | Latest checked epoch | IoU | nIoU | Pd | Fa | Note |
+|---|---:|---:|---:|---:|---:|---|
+| NUAA-SIRST | 48 | 0.4463 | 0.5246 | 0.9354 | 0.000381 | early status only, not final |
+| NUDT-SIRST | 27 | 0.3644 | 0.4069 | 0.9291 | 0.000455 | early status only, not final |
+| IRSTD-1K | 6 | 0.0194 | 0.0412 | 0.1735 | 0.005606 | restarted after cleaning a CRLF-tainted output directory |
+
+上述数值仅用于确认训练和验证循环正常运行，不能作为最终性能对比。最终比较仍以各 run 的 `best.pt` / `best_iou.pt` 和完整测试集评估为准。
