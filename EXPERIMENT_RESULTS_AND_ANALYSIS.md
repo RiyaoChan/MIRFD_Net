@@ -588,3 +588,31 @@ runs/v2_2_ablation/irstd_stage1_identity_stage2_fsre
 3. NUAA-SIRST best 出现在 epoch 136，后续回落明显，说明 `stage1 identity + FSRE + high_raw` 可能引入了不稳定高频响应或过拟合。
 4. IRSTD-1K 虽然中后期达到 0.5968，但仍低于 v2.1 shallow 的 0.6290，暂不替换 IRSTD 主配置。
 5. 当前最佳结果表需要更新：NUDT-SIRST 的全局最佳从 `nudt_sirst_ss2d_sctrans_adamw_bs32_lr1e3` 替换为 `v2_2_ablation/nudt_stage1_identity_stage2_fsre`；NUAA-SIRST 和 IRSTD-1K 保持原最佳。
+
+### 12.3 v2.2 FSRE 频域与目标选择性诊断（2026-07-01）
+
+已生成 v2.2 FSRE 的测试集内部特征统计和可视化：
+
+| Dataset | Raw CSV | Summary CSV | Visualization |
+|---|---|---|---|
+| NUAA-SIRST | `docs/diagnostics/feature_statistics/nuaa_v2_2_stage1_identity_stage2_fsre.csv` | `docs/diagnostics/feature_statistics/summary_nuaa_v2_2_stage1_identity_stage2_fsre.csv` | `docs/visualizations/v2_2_fsre_feature_diagnostics/nuaa_v2_diagnostic/contact_sheet.png` |
+| NUDT-SIRST | `docs/diagnostics/feature_statistics/nudt_v2_2_stage1_identity_stage2_fsre.csv` | `docs/diagnostics/feature_statistics/summary_nudt_v2_2_stage1_identity_stage2_fsre.csv` | `docs/visualizations/v2_2_fsre_feature_diagnostics/nudt_v2_diagnostic/contact_sheet.png` |
+| IRSTD-1K | `docs/diagnostics/feature_statistics/irstd_v2_2_stage1_identity_stage2_fsre.csv` | `docs/diagnostics/feature_statistics/summary_irstd_v2_2_stage1_identity_stage2_fsre.csv` | `docs/visualizations/v2_2_fsre_feature_diagnostics/irstd_v2_diagnostic/contact_sheet.png` |
+
+与 v2.1 shallow high skip 对比，关键现象如下：
+
+| Dataset | Stage | `R_high_high_raw` change | `high_raw_fg_bg` change | `high_hat_fg_bg` change | `gate_fg_minus_bg` change | `false_alarm_rate` change | Interpretation |
+|---|---:|---:|---:|---:|---:|---:|---|
+| NUAA-SIRST | 2 | +0.1087 | -1.0111 | -0.8256 | -0.0019 | +0.0467 | 高频能量增加，但目标选择性下降，误警上升 |
+| NUDT-SIRST | 3 | +0.0667 | +0.8824 | +0.7707 | +0.0625 | +0.0060 | 深层 high response 更目标相关，解释 NUDT 提升 |
+| NUDT-SIRST | 4 | +0.0718 | +0.1530 | +0.2498 | +0.0756 | +0.0060 | gate 对目标区域更正向，深层语义更干净 |
+| IRSTD-1K | 2 | +0.0679 | +0.7663 | +1.2234 | +0.1400 | -0.0050 | stage-2 FSRE 明显增强目标相关高频 |
+| IRSTD-1K | 4 | +0.1184 | -0.1180 | -0.1468 | +0.0190 | -0.0050 | 深层高频能量增加但目标选择性下降，限制最终 IoU |
+
+可视化结论：
+
+1. FSRE 确实让 `high_raw/high_hat` 的频谱高频成分更强，尤其 stage-2/3/4 的 FFT 图中高频扩展更明显。
+2. “高频更强”不等于“小目标更好”。NUAA 的 stage-2 高频增强同时覆盖背景纹理，`high_raw_fg_bg` 反而从 4.1339 降到 3.1228，false alarm rate 从 0.0654 升到 0.1121。
+3. NUDT 的收益更合理：stage-3/4 的 `high_raw_fg_bg` 和 `high_hat_fg_bg` 同时提升，gate 的 foreground-background 差值由负或弱正变为更明显正值，因此 FSRE 后的高频更像目标相关细节，而不是背景噪声。
+4. IRSTD 的 stage-2 目标选择性提升明显，但 stage-4 的 `high_hat_fg_bg` 降到 0.8338，说明深层高频仍可能偏向背景结构；这解释了诊断指标略有改善但最终 best IoU 仍不如 v2.1 shallow。
+5. 下一步不建议简单放大 FSRE，而应做 stage-aware FSRE：NUDT 可保留 stage-3/4 FSRE，NUAA 应降低或关闭 stage-2 FSRE，IRSTD 应限制 deep FSRE 或只保留 stage-2 FSRE 并抑制 stage-4 high response。

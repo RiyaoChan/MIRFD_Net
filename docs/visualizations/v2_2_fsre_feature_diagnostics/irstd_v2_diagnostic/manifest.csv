@@ -1,0 +1,9 @@
+index,image_path,mask_path,output_path
+0,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/images/XDU189.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/masks/XDU189.png,docs/visualizations/v2_2_fsre_feature_diagnostics/irstd_v2_diagnostic/0000_XDU189.png
+1,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/images/XDU935.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/masks/XDU935.png,docs/visualizations/v2_2_fsre_feature_diagnostics/irstd_v2_diagnostic/0001_XDU935.png
+2,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/images/XDU672.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/masks/XDU672.png,docs/visualizations/v2_2_fsre_feature_diagnostics/irstd_v2_diagnostic/0002_XDU672.png
+3,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/images/XDU231.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/masks/XDU231.png,docs/visualizations/v2_2_fsre_feature_diagnostics/irstd_v2_diagnostic/0003_XDU231.png
+4,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/images/XDU818.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/masks/XDU818.png,docs/visualizations/v2_2_fsre_feature_diagnostics/irstd_v2_diagnostic/0004_XDU818.png
+5,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/images/XDU888.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/masks/XDU888.png,docs/visualizations/v2_2_fsre_feature_diagnostics/irstd_v2_diagnostic/0005_XDU888.png
+6,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/images/XDU146.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/masks/XDU146.png,docs/visualizations/v2_2_fsre_feature_diagnostics/irstd_v2_diagnostic/0006_XDU146.png
+7,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/images/XDU48.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k/masks/XDU48.png,docs/visualizations/v2_2_fsre_feature_diagnostics/irstd_v2_diagnostic/0007_XDU48.png

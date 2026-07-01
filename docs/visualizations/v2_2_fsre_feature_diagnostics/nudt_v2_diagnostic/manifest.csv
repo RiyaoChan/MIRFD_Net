@@ -1,0 +1,9 @@
+index,image_path,mask_path,output_path
+0,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/images/000541.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/masks/000541.png,docs/visualizations/v2_2_fsre_feature_diagnostics/nudt_v2_diagnostic/0000_000541.png
+1,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/images/000832.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/masks/000832.png,docs/visualizations/v2_2_fsre_feature_diagnostics/nudt_v2_diagnostic/0001_000832.png
+2,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/images/000710.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/masks/000710.png,docs/visualizations/v2_2_fsre_feature_diagnostics/nudt_v2_diagnostic/0002_000710.png
+3,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/images/000316.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/masks/000316.png,docs/visualizations/v2_2_fsre_feature_diagnostics/nudt_v2_diagnostic/0003_000316.png
+4,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/images/001142.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/masks/001142.png,docs/visualizations/v2_2_fsre_feature_diagnostics/nudt_v2_diagnostic/0004_001142.png
+5,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/images/000409.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/masks/000409.png,docs/visualizations/v2_2_fsre_feature_diagnostics/nudt_v2_diagnostic/0005_000409.png
+6,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/images/000226.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/masks/000226.png,docs/visualizations/v2_2_fsre_feature_diagnostics/nudt_v2_diagnostic/0006_000226.png
+7,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/images/001133.png,/DATA20T/bip/cry/code/SIRST-5K-main/dataset/NUDT-SIRST/masks/001133.png,docs/visualizations/v2_2_fsre_feature_diagnostics/nudt_v2_diagnostic/0007_001133.png
