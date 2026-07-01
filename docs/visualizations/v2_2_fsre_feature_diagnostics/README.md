@@ -6,7 +6,7 @@ This folder contains test-set diagnostic visualizations for the first v2.2 FSRE 
 - `nudt_v2_diagnostic/`
 - `irstd_v2_diagnostic/`
 
-Each dataset folder contains 8 samples and a `contact_sheet.png`.
+Each dataset folder contains 20 samples and a `contact_sheet.png`.
 
 Each sample visualizes:
 
