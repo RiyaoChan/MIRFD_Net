@@ -9,10 +9,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import torch
+import torch.nn as nn
 
 from mirfd.losses import MIRFDLoss
 from mirfd.metrics import segmentation_metrics
-from mirfd.models import MIRFDNet, build_model
+from mirfd.models import FrequencySelectiveResidualEnhancer, MIRFDNet, build_model
 from mirfd.utils import load_config
 
 
@@ -62,16 +63,40 @@ def run_v2_config_smoke() -> None:
     cfg["loss"]["gate_bg_weight"] = 0.01
 
     model = build_model(cfg)
+    assert model.decoder_high_source == "high_raw"
+    assert model.high_skip_stages == {1, 2}
+    assert isinstance(model.stage1_hfe, nn.Identity)
+    for stage in (model.stage2, model.stage3, model.stage4):
+        for block in stage.blocks:
+            assert isinstance(block.hfe, FrequencySelectiveResidualEnhancer)
+
     x = torch.randn(2, 1, 64, 64)
     y = (torch.rand(2, 1, 64, 64) > 0.97).float()
 
     logits = model(x, return_dict=False)
     assert logits.shape == (2, 1, 64, 64)
 
+    decoder_inputs = {}
+
+    def capture_decoder_high(name):
+        def hook(_module, args):
+            decoder_inputs[name] = args[2]
+
+        return hook
+
+    dec2_hook = model.dec2.register_forward_pre_hook(capture_decoder_high("dec2"))
+    dec1_hook = model.dec1.register_forward_pre_hook(capture_decoder_high("dec1"))
     outputs = model(x, return_features=True)
+    dec2_hook.remove()
+    dec1_hook.remove()
+
     assert outputs["logits"].shape == (2, 1, 64, 64)
     for key in ("low0", "low", "residual", "high_raw", "high_hat", "gate"):
         assert key in outputs["features"]
+    assert decoder_inputs["dec2"] is not None
+    assert decoder_inputs["dec2"].data_ptr() == outputs["features"]["high_raw"][0].data_ptr()
+    assert decoder_inputs["dec1"] is not None
+    assert decoder_inputs["dec1"].data_ptr() == outputs["features"]["stage1_residual"][0].data_ptr()
 
     criterion = MIRFDLoss(**cfg["loss"])
     loss, details = criterion(outputs, y)
