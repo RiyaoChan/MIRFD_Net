@@ -616,3 +616,58 @@ runs/v2_2_ablation/irstd_stage1_identity_stage2_fsre
 3. NUDT 的收益更合理：stage-3/4 的 `high_raw_fg_bg` 和 `high_hat_fg_bg` 同时提升，gate 的 foreground-background 差值由负或弱正变为更明显正值，因此 FSRE 后的高频更像目标相关细节，而不是背景噪声。
 4. IRSTD 的 stage-2 目标选择性提升明显，但 stage-4 的 `high_hat_fg_bg` 降到 0.8338，说明深层高频仍可能偏向背景结构；这解释了诊断指标略有改善但最终 best IoU 仍不如 v2.1 shallow。
 5. 下一步不建议简单放大 FSRE，而应做 stage-aware FSRE：NUDT 可保留 stage-3/4 FSRE，NUAA 应降低或关闭 stage-2 FSRE，IRSTD 应限制 deep FSRE 或只保留 stage-2 FSRE 并抑制 stage-4 high response。
+
+## 13. MIRFD-Net v2.3 high raw / residual fusion 消融计划（2026-07-01）
+
+根据 `MIRFD_Net_v2_3_high_raw_fusion_ablation_plan.md`，v2.3 重点验证一个机制问题：小目标信息可能已经存在于 `residual/high_raw`，但 `gate -> high_hat` 调制不稳定，导致 block 主路径把背景高频也融合进 encoder 表示。
+
+v2.3 新增开关：
+
+| Switch | Values | Meaning |
+|---|---|---|
+| `model.mirfd.block_fusion_high_source` | `high_hat / high_raw / residual` | MIRFD Block 主路径 `Fuse(low, high)` 使用哪个 high 分支 |
+| `model.mirfd.gate_mode` | 新增 `none` | `none` 时不构建 gate，`high_hat == high_raw`，但仍输出全 1 gate map 用于诊断兼容 |
+
+`features["high"]` 和 `features["high_for_fusion"]` 现在表示实际进入 block fusion 的 high feature；`features["high_raw"]` 和 `features["high_hat"]` 仍显式保留。诊断脚本同步新增：
+
+```text
+R_high_high_for_fusion
+high_for_fusion_fg_bg
+block_fusion_high_source
+```
+
+实验矩阵：
+
+| Experiment | Config suffix | block fusion source | gate mode | decoder high source | Purpose |
+|---|---|---|---|---|---|
+| B | `block_high_raw_gate_none` | `high_raw` | `none` | `high_raw` | 验证 gate/high_hat 是否是主要瓶颈 |
+| C | `block_residual_gate_none` | `residual` | `none` | `high_raw` | 验证 encoder 主路径是否应更保守地使用 residual |
+| D | `block_high_raw_gate_enhance` | `high_raw` | `enhance` | `high_raw` | 保留 gate 诊断，但不让 high_hat 进入 block 主路径 |
+
+已新增 9 个配置文件，覆盖 NUAA-SIRST、NUDT-SIRST、IRSTD-1K：
+
+```text
+configs/mirfd_nuaa_sirst_ss2d_v2_3_block_high_raw_gate_none.yaml
+configs/mirfd_nuaa_sirst_ss2d_v2_3_block_residual_gate_none.yaml
+configs/mirfd_nuaa_sirst_ss2d_v2_3_block_high_raw_gate_enhance.yaml
+configs/mirfd_nudt_sirst_ss2d_v2_3_block_high_raw_gate_none.yaml
+configs/mirfd_nudt_sirst_ss2d_v2_3_block_residual_gate_none.yaml
+configs/mirfd_nudt_sirst_ss2d_v2_3_block_high_raw_gate_enhance.yaml
+configs/mirfd_irstd_1k_ss2d_v2_3_block_high_raw_gate_none.yaml
+configs/mirfd_irstd_1k_ss2d_v2_3_block_residual_gate_none.yaml
+configs/mirfd_irstd_1k_ss2d_v2_3_block_high_raw_gate_enhance.yaml
+```
+
+输出目录统一为：
+
+```text
+runs/v2_3_ablation/<dataset>_block_high_raw_gate_none
+runs/v2_3_ablation/<dataset>_block_residual_gate_none
+runs/v2_3_ablation/<dataset>_block_high_raw_gate_enhance
+```
+
+优先观察：
+
+1. 如果 B 优于 v2.2 A，说明 `gate/high_hat` 是主要瓶颈，direct `high_raw` fusion 更合理。
+2. 如果 C 优于 B，说明 `high_raw` 更适合 decoder skip，但 encoder 主路径应使用更保守的 `residual`。
+3. 如果 D 优于 A 但弱于 B，说明 gate 计算可以保留用于诊断或辅助监督，但不应参与主路径 fusion。

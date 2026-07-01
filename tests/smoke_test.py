@@ -48,7 +48,8 @@ def run_v2_config_smoke() -> None:
     cfg["model"]["high_skip_stages"] = [1, 2]
     cfg["model"]["decoder_high_source"] = "high_raw"
     cfg["model"]["stage1_high_enhancer_type"] = "identity"
-    cfg["model"]["mirfd"]["gate_mode"] = "centered"
+    cfg["model"]["mirfd"]["block_fusion_high_source"] = "high_raw"
+    cfg["model"]["mirfd"]["gate_mode"] = "none"
     cfg["model"]["mirfd"]["gate_scale_min"] = 0.25
     cfg["model"]["mirfd"]["gate_scale_max"] = 1.75
     cfg["model"]["mirfd"]["high_residual_mode"] = "hfe"
@@ -69,6 +70,8 @@ def run_v2_config_smoke() -> None:
     for stage in (model.stage2, model.stage3, model.stage4):
         for block in stage.blocks:
             assert isinstance(block.hfe, FrequencySelectiveResidualEnhancer)
+            assert block.block_fusion_high_source == "high_raw"
+            assert block.gate is None
 
     x = torch.randn(2, 1, 64, 64)
     y = (torch.rand(2, 1, 64, 64) > 0.97).float()
@@ -91,12 +94,34 @@ def run_v2_config_smoke() -> None:
     dec1_hook.remove()
 
     assert outputs["logits"].shape == (2, 1, 64, 64)
-    for key in ("low0", "low", "residual", "high_raw", "high_hat", "gate"):
+    for key in ("low0", "low", "residual", "high_raw", "high_hat", "high_for_fusion", "gate"):
         assert key in outputs["features"]
+    for high_raw, high_hat, high_for_fusion, gate in zip(
+        outputs["features"]["high_raw"],
+        outputs["features"]["high_hat"],
+        outputs["features"]["high_for_fusion"],
+        outputs["features"]["gate"],
+    ):
+        assert torch.allclose(high_hat, high_raw, atol=1e-6)
+        assert torch.allclose(high_for_fusion, high_raw, atol=1e-6)
+        assert torch.allclose(gate, torch.ones_like(gate), atol=1e-6)
     assert decoder_inputs["dec2"] is not None
     assert decoder_inputs["dec2"].data_ptr() == outputs["features"]["high_raw"][0].data_ptr()
     assert decoder_inputs["dec1"] is not None
     assert decoder_inputs["dec1"].data_ptr() == outputs["features"]["stage1_residual"][0].data_ptr()
+
+    residual_fusion_cfg = deepcopy(cfg)
+    residual_fusion_cfg["model"]["mirfd"]["block_fusion_high_source"] = "residual"
+    residual_model = build_model(residual_fusion_cfg)
+    residual_outputs = residual_model(x, return_features=True)
+    for high_for_fusion, residual, high_raw, high_hat in zip(
+        residual_outputs["features"]["high_for_fusion"],
+        residual_outputs["features"]["residual"],
+        residual_outputs["features"]["high_raw"],
+        residual_outputs["features"]["high_hat"],
+    ):
+        assert torch.allclose(high_for_fusion, residual, atol=1e-6)
+        assert torch.allclose(high_hat, high_raw, atol=1e-6)
 
     criterion = MIRFDLoss(**cfg["loss"])
     loss, details = criterion(outputs, y)

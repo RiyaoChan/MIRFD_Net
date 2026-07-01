@@ -33,12 +33,15 @@ RAW_FIELDNAMES = [
     "R_high_residual",
     "R_high_high_raw",
     "R_high_high_hat",
+    "R_high_high_for_fusion",
     "low_fg_bg",
     "residual_fg_bg",
     "high_raw_fg_bg",
     "gate_fg_bg",
     "high_hat_fg_bg",
+    "high_for_fusion_fg_bg",
     "gate_fg_minus_bg",
+    "block_fusion_high_source",
     "pred_iou",
     "pred_has_false_alarm",
 ]
@@ -50,11 +53,13 @@ SUMMARY_METRICS = [
     "R_high_residual",
     "R_high_high_raw",
     "R_high_high_hat",
+    "R_high_high_for_fusion",
     "low_fg_bg",
     "residual_fg_bg",
     "high_raw_fg_bg",
     "gate_fg_bg",
     "high_hat_fg_bg",
+    "high_for_fusion_fg_bg",
     "gate_fg_minus_bg",
     "pred_iou",
 ]
@@ -154,7 +159,7 @@ def load_model_checkpoint(checkpoint_path: str | Path, model: torch.nn.Module, d
 
 def _feature_at(features: dict[str, Any], key: str, stage_index: int, warned_keys: set[str]) -> torch.Tensor | None:
     values = features.get(key)
-    if values is None and key == "high_hat":
+    if values is None and key in {"high_hat", "high_for_fusion"}:
         values = features.get("high")
     if values is None:
         if key not in warned_keys:
@@ -178,7 +183,7 @@ def _has_stage1_features(features: dict[str, Any]) -> bool:
 
 def _stage_count(features: dict[str, Any]) -> int:
     counts = []
-    for key in ("low", "residual", "high_raw", "high_hat", "high", "gate"):
+    for key in ("low", "residual", "high_raw", "high_hat", "high_for_fusion", "high", "gate"):
         values = features.get(key)
         if isinstance(values, (list, tuple)):
             counts.append(len(values))
@@ -194,6 +199,19 @@ def _sample_feature(feature: torch.Tensor | None, batch_index: int) -> torch.Ten
         warnings.warn(f"Expected feature tensor [B,C,H,W], got shape {tuple(feature.shape)}.", stacklevel=2)
         return None
     return feature[batch_index : batch_index + 1].detach().float()
+
+
+def _metadata_at(features: dict[str, Any], key: str, stage_index: int | None, default: str = "") -> str:
+    values = features.get(key)
+    if values is None:
+        return default
+    if isinstance(values, (list, tuple)):
+        if stage_index is None:
+            return str(values[0]) if values else default
+        if stage_index < len(values):
+            return str(values[stage_index])
+        return default
+    return str(values)
 
 
 def response_map(feature: torch.Tensor, is_gate: bool = False) -> torch.Tensor:
@@ -469,13 +487,25 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                         residual = _sample_feature(_feature_at(features, "stage1_residual", 0, warned_keys), batch_index)
                         high_raw = _sample_feature(_feature_at(features, "stage1_high", 0, warned_keys), batch_index)
                         high_hat = high_raw
+                        high_for_fusion = high_raw
                         gate = None
+                        block_fusion_high_source = "stage1"
                     else:
                         low = _sample_feature(_feature_at(features, "low", stage_index, warned_keys), batch_index)
                         residual = _sample_feature(_feature_at(features, "residual", stage_index, warned_keys), batch_index)
                         high_raw = _sample_feature(_feature_at(features, "high_raw", stage_index, warned_keys), batch_index)
                         high_hat = _sample_feature(_feature_at(features, "high_hat", stage_index, warned_keys), batch_index)
+                        high_for_fusion = _sample_feature(
+                            _feature_at(features, "high_for_fusion", stage_index, warned_keys),
+                            batch_index,
+                        )
                         gate = _sample_feature(_feature_at(features, "gate", stage_index, warned_keys), batch_index)
+                        block_fusion_high_source = _metadata_at(
+                            features,
+                            "block_fusion_high_source",
+                            stage_index,
+                            default="",
+                        )
 
                     low_fg_bg, _, _, fg_count, _ = fg_bg_stats(low, sample_mask, is_gate=False)
                     if low is not None and fg_count == 0:
@@ -487,6 +517,7 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                     residual_fg_bg, _, _, _, _ = fg_bg_stats(residual, sample_mask, is_gate=False)
                     high_raw_fg_bg, _, _, _, _ = fg_bg_stats(high_raw, sample_mask, is_gate=False)
                     high_hat_fg_bg, _, _, _, _ = fg_bg_stats(high_hat, sample_mask, is_gate=False)
+                    high_for_fusion_fg_bg, _, _, _, _ = fg_bg_stats(high_for_fusion, sample_mask, is_gate=False)
                     if gate is None:
                         gate_fg_bg = float("nan")
                         gate_fg_minus_bg = float("nan")
@@ -504,12 +535,15 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                             "R_high_residual": fft_high_ratio(residual, args.fft_radius_ratio),
                             "R_high_high_raw": fft_high_ratio(high_raw, args.fft_radius_ratio),
                             "R_high_high_hat": fft_high_ratio(high_hat, args.fft_radius_ratio),
+                            "R_high_high_for_fusion": fft_high_ratio(high_for_fusion, args.fft_radius_ratio),
                             "low_fg_bg": low_fg_bg,
                             "residual_fg_bg": residual_fg_bg,
                             "high_raw_fg_bg": high_raw_fg_bg,
                             "gate_fg_bg": gate_fg_bg,
                             "high_hat_fg_bg": high_hat_fg_bg,
+                            "high_for_fusion_fg_bg": high_for_fusion_fg_bg,
                             "gate_fg_minus_bg": gate_fg_minus_bg,
+                            "block_fusion_high_source": block_fusion_high_source,
                             "pred_iou": pred_iou,
                             "pred_has_false_alarm": pred_has_fa,
                         }

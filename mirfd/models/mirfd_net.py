@@ -40,10 +40,12 @@ class MIRFDStage(nn.Module):
                     "low0": x,
                     "low": x,
                     "high": torch.zeros_like(x),
+                    "high_for_fusion": torch.zeros_like(x),
                     "high_raw": torch.zeros_like(x),
                     "high_hat": torch.zeros_like(x),
                     "residual": torch.zeros_like(x),
                     "gate": torch.ones_like(x),
+                    "block_fusion_high_source": "high_hat",
                 }
             return x, last
         return x
@@ -232,11 +234,17 @@ class MIRFDNet(nn.Module):
             output["features"] = {
                 "low0": [b2["low0"], b3["low0"], b4["low0"]],
                 "low": [b2["low"], b3["low"], b4["low"]],
-                "high": [b2["high_hat"], b3["high_hat"], b4["high_hat"]],
+                "high": [b2["high"], b3["high"], b4["high"]],
+                "high_for_fusion": [b2["high_for_fusion"], b3["high_for_fusion"], b4["high_for_fusion"]],
                 "high_raw": [b2["high_raw"], b3["high_raw"], b4["high_raw"]],
                 "high_hat": [b2["high_hat"], b3["high_hat"], b4["high_hat"]],
                 "residual": [b2["residual"], b3["residual"], b4["residual"]],
                 "gate": [b2["gate"], b3["gate"], b4["gate"]],
+                "block_fusion_high_source": [
+                    b2["block_fusion_high_source"],
+                    b3["block_fusion_high_source"],
+                    b4["block_fusion_high_source"],
+                ],
                 "stage1_low": [e1_low],
                 "stage1_residual": [e1_residual],
                 "stage1_high": [e1_high],
@@ -270,6 +278,7 @@ def build_model(config: dict[str, Any] | None = None) -> MIRFDNet:
         "fsre_num_bands": mirfd_cfg.get("fsre_num_bands", 4),
         "fsre_window_size": mirfd_cfg.get("fsre_window_size", 8),
         "fsre_gamma_init": mirfd_cfg.get("fsre_gamma_init", 0.1),
+        "block_fusion_high_source": mirfd_cfg.get("block_fusion_high_source", "high_hat"),
         "gate_mode": mirfd_cfg.get("gate_mode", "suppress"),
         "gate_alpha_init": mirfd_cfg.get("gate_alpha_init", 1.0),
         "gate_scale_min": mirfd_cfg.get("gate_scale_min", 0.25),

@@ -101,8 +101,9 @@ class MIRFDBlock(nn.Module):
     SUPPORTED_RESIDUALS = {"mamba_residual", "avgpool", "laplace", "sobel", "pyramid_avgpool"}
     SUPPORTED_FUSIONS = {"concat", "residual_compensation"}
     SUPPORTED_HIGH_RESIDUAL_MODES = {"hfe", "concat_proj", "add", "add_scaled"}
-    SUPPORTED_GATE_MODES = {"suppress", "enhance", "half_enhance", "centered"}
+    SUPPORTED_GATE_MODES = {"none", "suppress", "enhance", "half_enhance", "centered"}
     SUPPORTED_HIGH_ENHANCERS = {"identity", "conv_hfe", "freq_window"}
+    SUPPORTED_BLOCK_FUSION_HIGH_SOURCES = {"high_hat", "high_raw", "residual"}
 
     def __init__(
         self,
@@ -124,6 +125,7 @@ class MIRFDBlock(nn.Module):
         fsre_num_bands: int = 4,
         fsre_window_size: int = 8,
         fsre_gamma_init: float = 0.1,
+        block_fusion_high_source: str = "high_hat",
         gate_mode: str = "suppress",
         gate_alpha_init: float = 1.0,
         gate_scale_min: float = 0.25,
@@ -138,6 +140,11 @@ class MIRFDBlock(nn.Module):
             raise ValueError(f"Unsupported high_residual_mode: {high_residual_mode}")
         if high_enhancer_type not in self.SUPPORTED_HIGH_ENHANCERS:
             raise ValueError(f"Unsupported high_enhancer_type: {high_enhancer_type}")
+        if block_fusion_high_source not in self.SUPPORTED_BLOCK_FUSION_HIGH_SOURCES:
+            raise ValueError(
+                f"Unsupported block_fusion_high_source: {block_fusion_high_source}. "
+                f"Expected one of {sorted(self.SUPPORTED_BLOCK_FUSION_HIGH_SOURCES)}."
+            )
         if gate_mode not in self.SUPPORTED_GATE_MODES:
             raise ValueError(f"Unsupported gate_mode: {gate_mode}")
         if gate_scale_max <= gate_scale_min:
@@ -151,6 +158,7 @@ class MIRFDBlock(nn.Module):
         self.use_gate = use_gate
         self.high_residual_mode = high_residual_mode
         self.high_enhancer_type = high_enhancer_type
+        self.block_fusion_high_source = block_fusion_high_source
         self.gate_mode = gate_mode
         self.gate_scale_min = float(gate_scale_min)
         self.gate_scale_max = float(gate_scale_max)
@@ -177,7 +185,7 @@ class MIRFDBlock(nn.Module):
         )
         if high_residual_mode == "add_scaled":
             self.hfe_scale = nn.Parameter(torch.tensor(float(hfe_scale_init)))
-        self.gate = TargetAwareGate(dim, norm=norm) if use_gate else None
+        self.gate = TargetAwareGate(dim, norm=norm) if use_gate and gate_mode != "none" else None
         self.gate_alpha = nn.Parameter(torch.tensor(float(gate_alpha_init)))
 
         if fusion == "concat":
@@ -248,6 +256,8 @@ class MIRFDBlock(nn.Module):
         return enhanced
 
     def _apply_gate(self, high_raw: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        if self.gate_mode == "none":
+            return high_raw
         if self.gate_mode == "suppress":
             return gate * high_raw
         if self.gate_mode == "half_enhance":
@@ -260,25 +270,50 @@ class MIRFDBlock(nn.Module):
         alpha = torch.clamp(self.gate_alpha, 0.0, 2.0)
         return (1.0 + alpha * gate) * high_raw
 
+    def _select_high_for_fusion(
+        self,
+        residual: torch.Tensor,
+        high_raw: torch.Tensor,
+        high_hat: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.block_fusion_high_source == "high_hat":
+            return high_hat
+        if self.block_fusion_high_source == "high_raw":
+            return high_raw
+        if self.block_fusion_high_source == "residual":
+            return residual
+        raise RuntimeError(f"Invalid block_fusion_high_source: {self.block_fusion_high_source}")
+
     def forward(self, x: torch.Tensor, return_branches: bool = False):
         low0, low, residual = self._low_and_residual(x)
         high_raw = self._high_branch(residual)
-        gate = self.gate(low, residual) if self.gate is not None else torch.ones_like(high_raw)
-        high_hat = self._apply_gate(high_raw, gate)
+        if self.gate is None:
+            gate = torch.ones_like(high_raw)
+            high_hat = high_raw
+        else:
+            gate = self.gate(low, residual)
+            high_hat = self._apply_gate(high_raw, gate)
+        high_for_fusion = self._select_high_for_fusion(
+            residual=residual,
+            high_raw=high_raw,
+            high_hat=high_hat,
+        )
 
         if self.fusion == "concat":
-            out = self.fuse(torch.cat([low, high_hat], dim=1)) + x
+            out = self.fuse(torch.cat([low, high_for_fusion], dim=1)) + x
         else:
-            out = x + low + self.gamma * high_hat
+            out = x + low + self.gamma * high_for_fusion
 
         if return_branches:
             return out, {
                 "low0": low0,
                 "low": low,
-                "high": high_hat,
+                "high": high_for_fusion,
+                "high_for_fusion": high_for_fusion,
                 "high_raw": high_raw,
                 "high_hat": high_hat,
                 "residual": residual,
                 "gate": gate,
+                "block_fusion_high_source": self.block_fusion_high_source,
             }
         return out

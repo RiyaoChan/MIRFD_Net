@@ -105,7 +105,7 @@ class MIRFDLoss(nn.Module):
         gate_bg_weight: float = 0.0,
     ) -> None:
         super().__init__()
-        if spectral_high_target not in {"high", "high_hat", "high_raw", "residual"}:
+        if spectral_high_target not in {"high", "high_for_fusion", "high_hat", "high_raw", "residual"}:
             raise ValueError(f"Unsupported spectral_high_target: {spectral_high_target}")
         self.bce_weight = bce_weight
         self.dice_weight = dice_weight
