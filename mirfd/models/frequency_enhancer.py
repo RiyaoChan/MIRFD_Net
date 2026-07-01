@@ -92,26 +92,28 @@ class FrequencySelectiveResidualEnhancer(nn.Module):
         x_win = x_win.permute(0, 2, 4, 1, 3, 5).contiguous()
         x_win = x_win.view(-1, channels, ws, ws)
 
-        fft = torch.fft.fft2(x_win, dim=(-2, -1))
-        fft = torch.fft.fftshift(fft, dim=(-2, -1))
-        mag = torch.abs(fft)
-        masks = self._band_masks(x.device, mag.dtype)
-        masks_view = masks.view(1, 1, self.num_bands, ws, ws)
-        band_energy = (mag.unsqueeze(2) * masks_view).sum(dim=(-2, -1))
-        band_energy = band_energy / (masks_view.sum(dim=(-2, -1)) + 1e-6)
+        with torch.amp.autocast(device_type=x.device.type, enabled=False):
+            x_win_float = x_win.float()
+            fft = torch.fft.fft2(x_win_float, dim=(-2, -1))
+            fft = torch.fft.fftshift(fft, dim=(-2, -1))
+            mag = torch.abs(fft)
+            masks = self._band_masks(x.device, mag.dtype)
+            masks_view = masks.view(1, 1, self.num_bands, ws, ws)
+            band_energy = (mag.unsqueeze(2) * masks_view).sum(dim=(-2, -1))
+            band_energy = band_energy / (masks_view.sum(dim=(-2, -1)) + 1e-6)
 
-        desc = band_energy.mean(dim=1)
-        weights = self.band_mlp(desc)
-        freq_weight = torch.einsum("nb,bhw->nhw", weights, masks).unsqueeze(1)
+            desc = band_energy.mean(dim=1)
+            weights = self.band_mlp(desc)
+            freq_weight = torch.einsum("nb,bhw->nhw", weights, masks).unsqueeze(1)
 
-        fft_filtered = fft * (1.0 + freq_weight)
-        fft_filtered = torch.fft.ifftshift(fft_filtered, dim=(-2, -1))
-        x_freq = torch.fft.ifft2(fft_filtered, dim=(-2, -1)).real
+            fft_filtered = fft * (1.0 + freq_weight)
+            fft_filtered = torch.fft.ifftshift(fft_filtered, dim=(-2, -1))
+            x_freq = torch.fft.ifft2(fft_filtered, dim=(-2, -1)).real
 
-        x_freq = x_freq.view(batch, padded_h // ws, padded_w // ws, channels, ws, ws)
-        x_freq = x_freq.permute(0, 3, 1, 4, 2, 5).contiguous()
-        x_freq = x_freq.view(batch, channels, padded_h, padded_w)
-        x_freq = x_freq[:, :, :height, :width]
+            x_freq = x_freq.view(batch, padded_h // ws, padded_w // ws, channels, ws, ws)
+            x_freq = x_freq.permute(0, 3, 1, 4, 2, 5).contiguous()
+            x_freq = x_freq.view(batch, channels, padded_h, padded_w)
+            x_freq = x_freq[:, :, :height, :width]
 
         gamma = torch.clamp(self.gamma, 0.0, 1.0)
-        return x + gamma * self.proj(x_freq)
+        return x + gamma * self.proj(x_freq.to(dtype=x.dtype))

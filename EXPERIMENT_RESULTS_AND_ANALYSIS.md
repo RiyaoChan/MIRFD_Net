@@ -671,3 +671,35 @@ runs/v2_3_ablation/<dataset>_block_high_raw_gate_enhance
 1. 如果 B 优于 v2.2 A，说明 `gate/high_hat` 是主要瓶颈，direct `high_raw` fusion 更合理。
 2. 如果 C 优于 B，说明 `high_raw` 更适合 decoder skip，但 encoder 主路径应使用更保守的 `residual`。
 3. 如果 D 优于 A 但弱于 B，说明 gate 计算可以保留用于诊断或辅助监督，但不应参与主路径 fusion。
+
+### 13.1 v2.3 消融启动记录（2026-07-01）
+
+已按 `MIRFD_Net_v2_3_high_raw_fusion_ablation_plan.md` 完成代码接入并启动实验。实现层面新增：
+
+1. `model.mirfd.block_fusion_high_source`，支持 `high_hat / high_raw / residual`，控制 MIRFD Block 内部 `Fuse(low, high)` 使用的高频源。
+2. `model.mirfd.gate_mode: none`，关闭 gate 模块时令 `high_hat == high_raw`，并输出全 1 gate map 以兼容诊断脚本。
+3. `features["high_for_fusion"]` 和 `features["block_fusion_high_source"]`，诊断脚本同步新增 `R_high_high_for_fusion` 与 `high_for_fusion_fg_bg`。
+4. FSRE 的局部 FFT、频带能量和 band MLP 计算在 AMP 下固定为 fp32，避免 `ComplexHalf` FFT warning 和半精度频域数值不稳定。
+
+服务器路径：`/DATA20T/bip/cry/code/MIRFD_Net`。启动前已通过服务器端 `tests/smoke_test.py`，并用 CUDA+AMP 前向验证：
+
+```text
+max_abs(high_for_fusion - high_raw) = 0.0
+complex_half_warnings = 0
+```
+
+本轮实验 launcher PID：`2534612`，启动时间：`2026-07-01 17:21:15`。使用 GPU `0 1 2 3 4 5 6`，前 7 组并行，剩余 2 组由同一 launcher 排队执行。
+
+| Dataset | Variant | GPU status | Config | Output dir | Log |
+|---|---|---:|---|---|---|
+| NUAA-SIRST | `block_high_raw_gate_none` | 0 running | `configs/mirfd_nuaa_sirst_ss2d_v2_3_block_high_raw_gate_none.yaml` | `runs/v2_3_ablation/nuaa_block_high_raw_gate_none` | `runs/v2_3_ablation/logs/nuaa_block_high_raw_gate_none.log` |
+| NUDT-SIRST | `block_high_raw_gate_none` | 1 running | `configs/mirfd_nudt_sirst_ss2d_v2_3_block_high_raw_gate_none.yaml` | `runs/v2_3_ablation/nudt_block_high_raw_gate_none` | `runs/v2_3_ablation/logs/nudt_block_high_raw_gate_none.log` |
+| IRSTD-1K | `block_high_raw_gate_none` | 2 running | `configs/mirfd_irstd_1k_ss2d_v2_3_block_high_raw_gate_none.yaml` | `runs/v2_3_ablation/irstd_block_high_raw_gate_none` | `runs/v2_3_ablation/logs/irstd_block_high_raw_gate_none.log` |
+| NUAA-SIRST | `block_residual_gate_none` | 3 running | `configs/mirfd_nuaa_sirst_ss2d_v2_3_block_residual_gate_none.yaml` | `runs/v2_3_ablation/nuaa_block_residual_gate_none` | `runs/v2_3_ablation/logs/nuaa_block_residual_gate_none.log` |
+| NUDT-SIRST | `block_residual_gate_none` | 4 running | `configs/mirfd_nudt_sirst_ss2d_v2_3_block_residual_gate_none.yaml` | `runs/v2_3_ablation/nudt_block_residual_gate_none` | `runs/v2_3_ablation/logs/nudt_block_residual_gate_none.log` |
+| IRSTD-1K | `block_residual_gate_none` | 5 running | `configs/mirfd_irstd_1k_ss2d_v2_3_block_residual_gate_none.yaml` | `runs/v2_3_ablation/irstd_block_residual_gate_none` | `runs/v2_3_ablation/logs/irstd_block_residual_gate_none.log` |
+| NUAA-SIRST | `block_high_raw_gate_enhance` | 6 running | `configs/mirfd_nuaa_sirst_ss2d_v2_3_block_high_raw_gate_enhance.yaml` | `runs/v2_3_ablation/nuaa_block_high_raw_gate_enhance` | `runs/v2_3_ablation/logs/nuaa_block_high_raw_gate_enhance.log` |
+| NUDT-SIRST | `block_high_raw_gate_enhance` | queued | `configs/mirfd_nudt_sirst_ss2d_v2_3_block_high_raw_gate_enhance.yaml` | `runs/v2_3_ablation/nudt_block_high_raw_gate_enhance` | `runs/v2_3_ablation/logs/nudt_block_high_raw_gate_enhance.log` |
+| IRSTD-1K | `block_high_raw_gate_enhance` | queued | `configs/mirfd_irstd_1k_ss2d_v2_3_block_high_raw_gate_enhance.yaml` | `runs/v2_3_ablation/irstd_block_high_raw_gate_enhance` | `runs/v2_3_ablation/logs/irstd_block_high_raw_gate_enhance.log` |
+
+旧的 17:18 试跑在发现 FSRE under AMP 会触发 `ComplexHalf` warning 后已停止，并清理了 `runs/v2_3_ablation` 目录后重新启动；最终对比应只使用 17:21 后的新日志和 checkpoint。
