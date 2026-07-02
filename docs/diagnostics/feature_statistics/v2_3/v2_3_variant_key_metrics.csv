@@ -1,0 +1,10 @@
+dataset_short,run,variant,stage2_R_high_fusion,stage2_fusion_fg_bg,stage3_fusion_fg_bg,stage4_fusion_fg_bg,stage4_gate_fg_minus_bg,sample_mean_iou,false_alarm_rate
+NUAA,nuaa_block_high_raw_gate_none,high_raw_gate_none,0.8021449945,4.642869911,2.426927934,1.154849429,0.0,0.7177086454,0.06542056075
+NUAA,nuaa_block_residual_gate_none,residual_gate_none,0.7931568623,4.736353396,2.158974418,0.8646630401,0.0,0.7158593685,0.05140186916
+NUAA,nuaa_block_high_raw_gate_enhance,high_raw_gate_enhance,0.7806544925,3.796101921,1.53571689,0.9655403282,0.009712679642,0.6992158599,0.05140186916
+NUDT,nudt_block_high_raw_gate_none,high_raw_gate_none,0.76831216,3.202867566,2.368811152,1.153580045,2.692980939e-10,0.8798962214,0.03313253012
+NUDT,nudt_block_residual_gate_none,residual_gate_none,0.7941363572,5.322536891,1.84375216,0.9764321169,2.692980939e-10,0.8962166142,0.02560240964
+NUDT,nudt_block_high_raw_gate_enhance,high_raw_gate_enhance,0.7915841802,3.266984552,2.573260749,1.0514259,-0.05126094621,0.8839410495,0.03012048193
+IRSTD,irstd_block_high_raw_gate_none,high_raw_gate_none,0.7777176351,4.010456073,2.788684906,0.8069831349,0.0,0.5190737156,0.08457711443
+IRSTD,irstd_block_residual_gate_none,residual_gate_none,0.774984707,4.294903047,3.186250587,0.8341610673,0.0,0.5571000113,0.07960199005
+IRSTD,irstd_block_high_raw_gate_enhance,high_raw_gate_enhance,0.7939069052,4.135414477,1.953514527,0.8026655251,0.03116999522,0.5360558542,0.07462686567

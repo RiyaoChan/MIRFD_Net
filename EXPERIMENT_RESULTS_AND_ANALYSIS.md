@@ -703,3 +703,69 @@ complex_half_warnings = 0
 | IRSTD-1K | `block_high_raw_gate_enhance` | queued | `configs/mirfd_irstd_1k_ss2d_v2_3_block_high_raw_gate_enhance.yaml` | `runs/v2_3_ablation/irstd_block_high_raw_gate_enhance` | `runs/v2_3_ablation/logs/irstd_block_high_raw_gate_enhance.log` |
 
 旧的 17:18 试跑在发现 FSRE under AMP 会触发 `ComplexHalf` warning 后已停止，并清理了 `runs/v2_3_ablation` 目录后重新启动；最终对比应只使用 17:21 后的新日志和 checkpoint。
+
+### 13.2 v2.3 完成结果与高低频诊断（2026-07-02）
+
+9 组 v2.3 消融已全部完成 500 epoch，并已生成内部特征统计和高低频可视化。统计输出位于：
+
+```text
+docs/diagnostics/feature_statistics/v2_3/
+docs/visualizations/v2_3_residual_gate_none_feature_diagnostics/
+```
+
+其中：
+
+```text
+docs/diagnostics/feature_statistics/v2_3/v2_3_residual_gate_none_key_metrics.csv
+docs/diagnostics/feature_statistics/v2_3/v2_3_variant_key_metrics.csv
+docs/diagnostics/feature_statistics/v2_3/v2_3_residual_gate_none_key_metrics.png
+docs/visualizations/v2_3_residual_gate_none_feature_diagnostics/nuaa_residual_gate_none/contact_sheet.png
+docs/visualizations/v2_3_residual_gate_none_feature_diagnostics/nudt_residual_gate_none/contact_sheet.png
+docs/visualizations/v2_3_residual_gate_none_feature_diagnostics/irstd_residual_gate_none/contact_sheet.png
+```
+
+训练结果如下：
+
+| Dataset | Variant | Best IoU | Epoch | nIoU | Dice | Pd | Fa |
+|---|---|---:|---:|---:|---:|---:|---:|
+| NUAA-SIRST | `block_high_raw_gate_none` | 0.7300 | 255 | 0.7177 | 0.8440 | 0.9658 | 0.000024 |
+| NUAA-SIRST | `block_residual_gate_none` | **0.7307** | 337 | 0.7159 | 0.8444 | 0.9506 | 0.000029 |
+| NUAA-SIRST | `block_high_raw_gate_enhance` | 0.7172 | 224 | 0.6992 | 0.8353 | 0.9202 | 0.000017 |
+| NUDT-SIRST | `block_high_raw_gate_none` | 0.8597 | 436 | 0.8800 | 0.9245 | 0.9820 | 0.000013 |
+| NUDT-SIRST | `block_residual_gate_none` | **0.8746** | 457 | 0.8962 | 0.9331 | 0.9831 | 0.000011 |
+| NUDT-SIRST | `block_high_raw_gate_enhance` | 0.8669 | 435 | 0.8839 | 0.9287 | 0.9799 | 0.000008 |
+| IRSTD-1K | `block_high_raw_gate_none` | 0.5991 | 248 | 0.5191 | 0.7493 | 0.8367 | 0.000017 |
+| IRSTD-1K | `block_residual_gate_none` | **0.6114** | 264 | 0.5571 | 0.7589 | 0.8469 | 0.000024 |
+| IRSTD-1K | `block_high_raw_gate_enhance` | 0.6004 | 356 | 0.5361 | 0.7503 | 0.8537 | 0.000024 |
+
+定量统计说明：下表中的 `sample mean IoU` 是测试样本级 IoU 的均值，用于和 false alarm / feature statistics 对齐，不等同于训练日志中的全数据集 IoU。
+
+| Dataset | Best v2.3 variant | Stage | Decoder skip | `R_high(low)` | `R_high(residual)` | `R_high(fusion)` | `residual fg/bg` | `high_raw fg/bg` | `fusion fg/bg` | FA rate | sample mean IoU |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| NUAA-SIRST | `residual_gate_none` | 1 | 1 | 0.510 | 0.638 | 0.638 | 13.83 | 13.83 | 13.83 | 0.051 | 0.716 |
+| NUAA-SIRST | `residual_gate_none` | 2 | 1 | 0.827 | 0.793 | 0.793 | 4.74 | 4.22 | 4.74 | 0.051 | 0.716 |
+| NUAA-SIRST | `residual_gate_none` | 3 | 0 | 0.760 | 0.737 | 0.737 | 2.16 | 3.06 | 2.16 | 0.051 | 0.716 |
+| NUAA-SIRST | `residual_gate_none` | 4 | 0 | 0.680 | 0.610 | 0.610 | 0.86 | 1.17 | 0.86 | 0.051 | 0.716 |
+| NUDT-SIRST | `residual_gate_none` | 1 | 1 | 0.609 | 0.677 | 0.677 | 5.82 | 5.82 | 5.82 | 0.026 | 0.896 |
+| NUDT-SIRST | `residual_gate_none` | 2 | 1 | 0.821 | 0.794 | 0.794 | 5.32 | 4.43 | 5.32 | 0.026 | 0.896 |
+| NUDT-SIRST | `residual_gate_none` | 3 | 0 | 0.688 | 0.685 | 0.685 | 1.84 | 2.47 | 1.84 | 0.026 | 0.896 |
+| NUDT-SIRST | `residual_gate_none` | 4 | 0 | 0.546 | 0.465 | 0.465 | 0.98 | 1.07 | 0.98 | 0.026 | 0.896 |
+| IRSTD-1K | `residual_gate_none` | 1 | 1 | 0.582 | 0.690 | 0.690 | 12.86 | 12.86 | 12.86 | 0.080 | 0.557 |
+| IRSTD-1K | `residual_gate_none` | 2 | 1 | 0.808 | 0.775 | 0.775 | 4.29 | 4.52 | 4.29 | 0.080 | 0.557 |
+| IRSTD-1K | `residual_gate_none` | 3 | 0 | 0.788 | 0.758 | 0.758 | 3.19 | 4.06 | 3.19 | 0.080 | 0.557 |
+| IRSTD-1K | `residual_gate_none` | 4 | 0 | 0.702 | 0.672 | 0.672 | 0.83 | 0.88 | 0.83 | 0.080 | 0.557 |
+
+诊断结论：
+
+1. 三个数据集的最佳 v2.3 变体都是 `block_residual_gate_none`。这说明 v2.3 的主要收益不是来自 gate，而是来自让 block 主路径使用更保守的 `residual` 作为 high fusion source。
+2. Stage-1 和 stage-2 是最干净的局部小目标高频来源。三组数据中 stage-1 residual 的 `fg/bg` 均明显大于 1；stage-2 residual/fusion 的 `fg/bg` 也保持在 4.29-5.32 左右。
+3. Stage-4 的 high/fusion target selectivity 明显退化。`fusion fg/bg` 在 NUAA、NUDT、IRSTD 上分别为 0.86、0.98、0.83，接近或低于 1，说明深层 high response 更容易混入背景结构。这继续支持当前只使用 stage-1/2 decoder high skip，而不启用 stage-3/4 high skip。
+4. `high_raw` 在 stage-3 有时比 residual 更 target-selective，例如 NUAA stage-3 从 2.16 升到 3.06，NUDT stage-3 从 1.84 升到 2.47，IRSTD stage-3 从 3.19 升到 4.06。但直接让 high_raw 进入 block fusion 并没有带来更高 IoU，说明局部 feature 的 fg/bg 提升不等价于更好的全局 encoder 表示；增强后的 high_raw 仍可能携带背景纹理。
+5. `gate_mode: enhance` 没有稳定收益。其 gate foreground-background 差异很小，部分 stage 还为负；同时 `high_hat fg/bg` 通常没有稳定高于 `high_raw fg/bg`。因此当前 gate 还不能证明具备足够 target-aware 的调制能力。
+6. 可视化与统计一致：contact sheet 中 stage-1/2 的 residual/fusion 热力图更集中于目标附近，而 stage-3/4 的结构图和 FFT 图中背景纹理、边缘和条带响应更强。NUAA 与 IRSTD 的深层 high response 尤其容易覆盖背景结构，这解释了它们距离最优结果仍有差距。
+
+下一步建议：
+
+1. 主线优先保留 `block_fusion_high_source: residual` 与 `gate_mode: none`，继续围绕 stage-1/2 high skip 做轻量增强。
+2. 不建议简单恢复 deep high skip；如果后续使用 stage-3 high 信息，应先加 target-aware 筛选或 foreground-guided regularization。
+3. FSRE 可以保留在 high_raw 诊断分支中，但不宜直接作为 block 主路径 fusion 源；更合理的是只在 stage-2 或 dataset-specific 设置中启用。
