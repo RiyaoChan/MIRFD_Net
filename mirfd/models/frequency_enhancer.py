@@ -117,3 +117,104 @@ class FrequencySelectiveResidualEnhancer(nn.Module):
 
         gamma = torch.clamp(self.gamma, 0.0, 1.0)
         return x + gamma * self.proj(x_freq.to(dtype=x.dtype))
+
+
+class FFCStyleHighFreqGate(nn.Module):
+    """High-frequency spectral gate adapted from the SCTransNet FFC Fourier unit."""
+
+    def __init__(self, dim: int, reduction: int = 4, highfreq_threshold: float = 0.5) -> None:
+        super().__init__()
+        hidden = max(dim // max(int(reduction), 1), 1)
+        self.highfreq_threshold = float(highfreq_threshold)
+        self.fc1 = nn.Conv2d(dim, hidden, kernel_size=1)
+        self.act = nn.ReLU(inplace=True)
+        self.fc2 = nn.Conv2d(hidden, dim, kernel_size=1)
+        nn.init.zeros_(self.fc2.weight)
+        nn.init.zeros_(self.fc2.bias)
+        self.register_buffer("_mask_cache", torch.empty(0), persistent=False)
+        self._mask_shape: tuple[int, int] | None = None
+
+    def _highfreq_mask(self, height: int, width: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        if self._mask_cache.numel() == 0 or self._mask_cache.device != device or self._mask_shape != (height, width):
+            y = torch.linspace(-1.0, 1.0, height, device=device, dtype=torch.float32)
+            x = torch.linspace(0.0, 1.0, width, device=device, dtype=torch.float32)
+            yy, xx = torch.meshgrid(y, x, indexing="ij")
+            radius = torch.sqrt(xx.pow(2) + yy.pow(2)).clamp(0.0, 1.0)
+            self._mask_cache = (radius >= self.highfreq_threshold).float()
+            self._mask_shape = (height, width)
+        return self._mask_cache.to(dtype=dtype)
+
+    def forward(self, fft_feat: torch.Tensor) -> torch.Tensor:
+        amp = torch.abs(fft_feat)
+        height, width = amp.shape[-2:]
+        mask = self._highfreq_mask(height, width, amp.device, amp.real.dtype).view(1, 1, height, width)
+        denom = mask.sum(dim=(-2, -1), keepdim=True).clamp_min(1e-6)
+        high_mean = (amp * mask).sum(dim=(-2, -1), keepdim=True) / denom
+        return 1.0 + torch.tanh(self.fc2(self.act(self.fc1(high_mean))))
+
+
+class FFCFrequencyResidualEnhancer(nn.Module):
+    """FFC-style global Fourier enhancer for MIRFD residual high branches.
+
+    This follows the SCTransNet FFC pattern: rFFT, real/imaginary channel mixing
+    by 1x1 convolution, optional high-frequency spectral gate, inverse rFFT, and
+    spatial fusion with a local branch.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        gamma_init: float = 0.1,
+        norm: str = "batch",
+        fft_norm: str = "ortho",
+        use_highfreq_gate: bool = True,
+        highfreq_threshold: float = 0.5,
+        gate_reduction: int = 4,
+        local_kernel: int = 3,
+    ) -> None:
+        super().__init__()
+        if local_kernel <= 0 or local_kernel % 2 == 0:
+            raise ValueError("local_kernel must be a positive odd integer")
+        self.dim = dim
+        self.fft_norm = fft_norm
+        self.freq_conv = nn.Sequential(
+            nn.Conv2d(dim * 2, dim * 2, kernel_size=1, bias=False),
+            nn.BatchNorm2d(dim * 2),
+            nn.ReLU(inplace=True),
+        )
+        self.highfreq_gate = (
+            FFCStyleHighFreqGate(dim, reduction=gate_reduction, highfreq_threshold=highfreq_threshold)
+            if use_highfreq_gate
+            else None
+        )
+        self.local = ConvNormAct(
+            dim,
+            dim,
+            kernel_size=local_kernel,
+            padding=local_kernel // 2,
+            norm=norm,
+            groups=dim,
+        )
+        self.fuse = ConvNormAct(dim * 2, dim, kernel_size=1, padding=0, norm=norm)
+        self.gamma = nn.Parameter(torch.tensor(float(gamma_init)))
+
+    def _fourier_branch(self, x: torch.Tensor) -> torch.Tensor:
+        batch, channels, height, width = x.shape
+        with torch.amp.autocast(device_type=x.device.type, enabled=False):
+            x_float = x.float()
+            ffted = torch.fft.rfftn(x_float, dim=(-2, -1), norm=self.fft_norm)
+            ffted = torch.stack((ffted.real, ffted.imag), dim=2)
+            ffted = ffted.view(batch, channels * 2, height, width // 2 + 1)
+            ffted = self.freq_conv(ffted)
+            ffted = ffted.view(batch, channels, 2, height, width // 2 + 1)
+            ffted = torch.complex(ffted[:, :, 0], ffted[:, :, 1])
+            if self.highfreq_gate is not None:
+                ffted = self.highfreq_gate(ffted) * ffted
+            output = torch.fft.irfftn(ffted, s=(height, width), dim=(-2, -1), norm=self.fft_norm)
+        return output.to(dtype=x.dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        freq = self._fourier_branch(x)
+        local = self.local(x)
+        gamma = torch.clamp(self.gamma, 0.0, 1.0)
+        return x + gamma * self.fuse(torch.cat([local, freq], dim=1))

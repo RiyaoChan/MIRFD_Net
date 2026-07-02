@@ -769,3 +769,117 @@ docs/visualizations/v2_3_residual_gate_none_feature_diagnostics/irstd_residual_g
 1. 主线优先保留 `block_fusion_high_source: residual` 与 `gate_mode: none`，继续围绕 stage-1/2 high skip 做轻量增强。
 2. 不建议简单恢复 deep high skip；如果后续使用 stage-3 high 信息，应先加 target-aware 筛选或 foreground-guided regularization。
 3. FSRE 可以保留在 high_raw 诊断分支中，但不宜直接作为 block 主路径 fusion 源；更合理的是只在 stage-2 或 dataset-specific 设置中启用。
+
+## 14. MIRFD-Net v2.4 FFC-style Fourier high enhancer（2026-07-02）
+
+根据 `E:\code\SCTransNet-main\SCTransNet-main` 中的 FFC 实现，对 MIRFD high branch 做一次更接近 FFC 的频域增强改造。本轮没有直接把整个 FFC U-Net 或 SCTransNet 主干搬进 MIRFD，因为 MIRFD 的核心变量仍然是 Mamba/SS2D 产生的 `low` 与 `residual = F - low`；直接替换主干会破坏已有 v2.3 诊断结论的可比性。
+
+### 参考了什么
+
+主要参考文件：
+
+```text
+E:\code\SCTransNet-main\SCTransNet-main\model\lama_ffc.py
+E:\code\SCTransNet-main\SCTransNet-main\model\u2net.py
+```
+
+具体参考点：
+
+1. `FourierUnit`：使用 `torch.fft.rfftn` 将空间特征变到频域，把 real/imag 作为通道维度进行 1x1 卷积、BN、ReLU，再用 `irfftn` 回到空间域。
+2. `SpectralTransform`：先用 1x1 conv 压缩/整理通道，再进入 FourierUnit，最后再投影回输出通道；这说明 FFC 的频域分支不是简单 FFT 可视化，而是可学习的频域通道混合。
+3. `FFC`：将特征拆成 local/global 两部分，local 用普通卷积，global 用 `SpectralTransform`，再通过 `l2l/l2g/g2l/g2g` 路径融合。MIRFD 这里没有照搬通道拆分，而是把 residual high branch 视为需要频域增强的 global-high 分支。
+4. `SpectralHighFreqGate` 和 `FourierUnit_SpectralHighFreqGate_FeatureView`：在频域卷积后，根据高频区域幅值统计预测 `1 + tanh(.)` 的通道 gate，且最后一层零初始化，使初始 gate 接近 1，训练更稳。
+
+### 调整了什么
+
+新增代码：
+
+```text
+mirfd/models/frequency_enhancer.py
+  - FFCStyleHighFreqGate
+  - FFCFrequencyResidualEnhancer
+```
+
+`FFCFrequencyResidualEnhancer` 的路径为：
+
+```text
+R
+├─ local branch: depthwise ConvNormAct(R)
+└─ Fourier branch:
+   rfftn(R)
+   real/imag stack as channels
+   1x1 conv + BN + ReLU
+   optional high-frequency gate
+   irfftn(...)
+
+high_raw = R + gamma * Fuse(local, Fourier)
+```
+
+与原 v2.2 FSRE 的区别：
+
+| Module | Frequency granularity | Learnable operation | Output role |
+|---|---|---|---|
+| FSRE | local window FFT + radial bands | band-wise weights | `R + gamma * local-frequency response` |
+| FFC-style enhancer | global rFFT feature map | real/imag 1x1 conv + high-frequency gate | `R + gamma * Fuse(local, global Fourier response)` |
+
+新增配置开关：
+
+```yaml
+model:
+  mirfd:
+    high_enhancer_type: ffc
+    ffc_fft_norm: ortho
+    ffc_gamma_init: 0.1
+    ffc_use_highfreq_gate: true
+    ffc_highfreq_threshold: 0.5
+    ffc_gate_reduction: 4
+    ffc_local_kernel: 3
+```
+
+已接入的构建路径：
+
+```text
+mirfd/models/mirfd_block.py::build_high_enhancer(...)
+mirfd/models/mirfd_net.py::build_model(...)
+mirfd/models/__init__.py
+tests/smoke_test.py
+```
+
+### v2.4 实验设计
+
+为了和 v2.3 最优结论保持可比，本轮只替换 high enhancer：
+
+```text
+block_fusion_high_source: residual
+gate_mode: none
+decoder_high_source: high_raw
+stage1_high_enhancer_type: identity
+high_skip_stages: [1, 2]
+high_enhancer_type: ffc
+```
+
+也就是说：
+
+1. MIRFD Block 主路径仍用 `residual` 做 high fusion，避免 high_raw 直接污染 encoder。
+2. decoder stage-2 high skip 使用 FFC 学到的 `high_raw`，用于验证 FFC 是否能比 FSRE 学到更适合小目标恢复的高频特征。
+3. stage-1 仍保持 identity residual，避免浅层最干净的 high skip 被额外频域模块扰动。
+
+新增配置：
+
+```text
+configs/mirfd_nuaa_sirst_ss2d_v2_4_ffc_residual_gate_none.yaml
+configs/mirfd_nudt_sirst_ss2d_v2_4_ffc_residual_gate_none.yaml
+configs/mirfd_irstd_1k_ss2d_v2_4_ffc_residual_gate_none.yaml
+```
+
+新增启动脚本：
+
+```text
+scripts/run_v2_4_ffc_experiments.sh
+```
+
+预期判断：
+
+1. 如果 v2.4 FFC 高于 v2.3 residual_gate_none，说明全局 Fourier real/imag mixing 比 FSRE 的 local band weighting 更适合当前 high_raw decoder skip。
+2. 如果 v2.4 FFC 只提升 NUDT，不提升 NUAA/IRSTD，说明全局频域增强仍存在 dataset-specific 背景纹理放大问题。
+3. 如果 v2.4 FFC 下降，说明当前 MIRFD 的收益主要来自 residual 的保守注入，而不是更强的 high_raw 频域增强；后续应考虑 foreground-guided 或 mask-aware spectral gate，而不是继续放大频域分支。

@@ -278,6 +278,12 @@ def build_model(config: dict[str, Any] | None = None) -> MIRFDNet:
         "fsre_num_bands": mirfd_cfg.get("fsre_num_bands", 4),
         "fsre_window_size": mirfd_cfg.get("fsre_window_size", 8),
         "fsre_gamma_init": mirfd_cfg.get("fsre_gamma_init", 0.1),
+        "ffc_gamma_init": mirfd_cfg.get("ffc_gamma_init", 0.1),
+        "ffc_use_highfreq_gate": mirfd_cfg.get("ffc_use_highfreq_gate", True),
+        "ffc_highfreq_threshold": mirfd_cfg.get("ffc_highfreq_threshold", 0.5),
+        "ffc_gate_reduction": mirfd_cfg.get("ffc_gate_reduction", 4),
+        "ffc_local_kernel": mirfd_cfg.get("ffc_local_kernel", 3),
+        "ffc_fft_norm": mirfd_cfg.get("ffc_fft_norm", "ortho"),
         "block_fusion_high_source": mirfd_cfg.get("block_fusion_high_source", "high_hat"),
         "gate_mode": mirfd_cfg.get("gate_mode", "suppress"),
         "gate_alpha_init": mirfd_cfg.get("gate_alpha_init", 1.0),
@@ -314,6 +320,18 @@ def build_model(config: dict[str, Any] | None = None) -> MIRFDNet:
         "fsre_num_bands": mirfd_cfg.get("stage1_fsre_num_bands", mirfd_cfg.get("fsre_num_bands", 4)),
         "fsre_window_size": mirfd_cfg.get("stage1_fsre_window_size", mirfd_cfg.get("fsre_window_size", 8)),
         "fsre_gamma_init": mirfd_cfg.get("stage1_fsre_gamma_init", mirfd_cfg.get("fsre_gamma_init", 0.1)),
+        "ffc_gamma_init": mirfd_cfg.get("stage1_ffc_gamma_init", mirfd_cfg.get("ffc_gamma_init", 0.1)),
+        "ffc_use_highfreq_gate": mirfd_cfg.get(
+            "stage1_ffc_use_highfreq_gate",
+            mirfd_cfg.get("ffc_use_highfreq_gate", True),
+        ),
+        "ffc_highfreq_threshold": mirfd_cfg.get(
+            "stage1_ffc_highfreq_threshold",
+            mirfd_cfg.get("ffc_highfreq_threshold", 0.5),
+        ),
+        "ffc_gate_reduction": mirfd_cfg.get("stage1_ffc_gate_reduction", mirfd_cfg.get("ffc_gate_reduction", 4)),
+        "ffc_local_kernel": mirfd_cfg.get("stage1_ffc_local_kernel", mirfd_cfg.get("ffc_local_kernel", 3)),
+        "ffc_fft_norm": mirfd_cfg.get("stage1_ffc_fft_norm", mirfd_cfg.get("ffc_fft_norm", "ortho")),
     }
     return MIRFDNet(
         in_channels=model_cfg.get("in_channels", 1),

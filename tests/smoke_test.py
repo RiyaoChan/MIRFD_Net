@@ -13,7 +13,7 @@ import torch.nn as nn
 
 from mirfd.losses import MIRFDLoss
 from mirfd.metrics import segmentation_metrics
-from mirfd.models import FrequencySelectiveResidualEnhancer, MIRFDNet, build_model
+from mirfd.models import FFCFrequencyResidualEnhancer, FrequencySelectiveResidualEnhancer, MIRFDNet, build_model
 from mirfd.utils import load_config
 
 
@@ -122,6 +122,21 @@ def run_v2_config_smoke() -> None:
     ):
         assert torch.allclose(high_for_fusion, residual, atol=1e-6)
         assert torch.allclose(high_hat, high_raw, atol=1e-6)
+
+    ffc_cfg = deepcopy(residual_fusion_cfg)
+    ffc_cfg["model"]["mirfd"]["high_enhancer_type"] = "ffc"
+    ffc_cfg["model"]["mirfd"]["ffc_gamma_init"] = 0.1
+    ffc_cfg["model"]["mirfd"]["ffc_use_highfreq_gate"] = True
+    ffc_cfg["model"]["mirfd"]["ffc_highfreq_threshold"] = 0.5
+    ffc_cfg["model"]["mirfd"]["ffc_gate_reduction"] = 4
+    ffc_model = build_model(ffc_cfg)
+    for stage in (ffc_model.stage2, ffc_model.stage3, ffc_model.stage4):
+        for block in stage.blocks:
+            assert isinstance(block.hfe, FFCFrequencyResidualEnhancer)
+            assert block.block_fusion_high_source == "residual"
+    ffc_outputs = ffc_model(x, return_features=True)
+    assert ffc_outputs["logits"].shape == (2, 1, 64, 64)
+    assert ffc_outputs["features"]["high_raw"][0].shape == ffc_outputs["features"]["residual"][0].shape
 
     criterion = MIRFDLoss(**cfg["loss"])
     loss, details = criterion(outputs, y)

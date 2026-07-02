@@ -7,7 +7,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from .layers import ConvNormAct, make_norm
-from .frequency_enhancer import FrequencySelectiveResidualEnhancer
+from .frequency_enhancer import FFCFrequencyResidualEnhancer, FrequencySelectiveResidualEnhancer
 from .ss2d import build_mamba_block
 
 
@@ -79,6 +79,12 @@ def build_high_enhancer(
     fsre_num_bands: int = 4,
     fsre_window_size: int = 8,
     fsre_gamma_init: float = 0.1,
+    ffc_gamma_init: float = 0.1,
+    ffc_use_highfreq_gate: bool = True,
+    ffc_highfreq_threshold: float = 0.5,
+    ffc_gate_reduction: int = 4,
+    ffc_local_kernel: int = 3,
+    ffc_fft_norm: str = "ortho",
 ) -> nn.Module:
     if enhancer_type == "identity":
         return nn.Identity()
@@ -92,6 +98,17 @@ def build_high_enhancer(
             gamma_init=fsre_gamma_init,
             norm=norm,
         )
+    if enhancer_type == "ffc":
+        return FFCFrequencyResidualEnhancer(
+            dim=dim,
+            gamma_init=ffc_gamma_init,
+            norm=norm,
+            fft_norm=ffc_fft_norm,
+            use_highfreq_gate=ffc_use_highfreq_gate,
+            highfreq_threshold=ffc_highfreq_threshold,
+            gate_reduction=ffc_gate_reduction,
+            local_kernel=ffc_local_kernel,
+        )
     raise ValueError(f"Unsupported high_enhancer_type: {enhancer_type}")
 
 
@@ -102,7 +119,7 @@ class MIRFDBlock(nn.Module):
     SUPPORTED_FUSIONS = {"concat", "residual_compensation"}
     SUPPORTED_HIGH_RESIDUAL_MODES = {"hfe", "concat_proj", "add", "add_scaled"}
     SUPPORTED_GATE_MODES = {"none", "suppress", "enhance", "half_enhance", "centered"}
-    SUPPORTED_HIGH_ENHANCERS = {"identity", "conv_hfe", "freq_window"}
+    SUPPORTED_HIGH_ENHANCERS = {"identity", "conv_hfe", "freq_window", "ffc"}
     SUPPORTED_BLOCK_FUSION_HIGH_SOURCES = {"high_hat", "high_raw", "residual"}
 
     def __init__(
@@ -125,6 +142,12 @@ class MIRFDBlock(nn.Module):
         fsre_num_bands: int = 4,
         fsre_window_size: int = 8,
         fsre_gamma_init: float = 0.1,
+        ffc_gamma_init: float = 0.1,
+        ffc_use_highfreq_gate: bool = True,
+        ffc_highfreq_threshold: float = 0.5,
+        ffc_gate_reduction: int = 4,
+        ffc_local_kernel: int = 3,
+        ffc_fft_norm: str = "ortho",
         block_fusion_high_source: str = "high_hat",
         gate_mode: str = "suppress",
         gate_alpha_init: float = 1.0,
@@ -177,6 +200,12 @@ class MIRFDBlock(nn.Module):
             fsre_num_bands=fsre_num_bands,
             fsre_window_size=fsre_window_size,
             fsre_gamma_init=fsre_gamma_init,
+            ffc_gamma_init=ffc_gamma_init,
+            ffc_use_highfreq_gate=ffc_use_highfreq_gate,
+            ffc_highfreq_threshold=ffc_highfreq_threshold,
+            ffc_gate_reduction=ffc_gate_reduction,
+            ffc_local_kernel=ffc_local_kernel,
+            ffc_fft_norm=ffc_fft_norm,
         )
         self.high_proj = (
             ConvNormAct(dim * 2, dim, kernel_size=1, padding=0, norm=norm)
