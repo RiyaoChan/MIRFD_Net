@@ -883,3 +883,64 @@ scripts/run_v2_4_ffc_experiments.sh
 1. 如果 v2.4 FFC 高于 v2.3 residual_gate_none，说明全局 Fourier real/imag mixing 比 FSRE 的 local band weighting 更适合当前 high_raw decoder skip。
 2. 如果 v2.4 FFC 只提升 NUDT，不提升 NUAA/IRSTD，说明全局频域增强仍存在 dataset-specific 背景纹理放大问题。
 3. 如果 v2.4 FFC 下降，说明当前 MIRFD 的收益主要来自 residual 的保守注入，而不是更强的 high_raw 频域增强；后续应考虑 foreground-guided 或 mask-aware spectral gate，而不是继续放大频域分支。
+## 15. MIRFD-Net v2.4 FFC 内部特征统计与高低频可视化诊断（2026-07-02）
+
+诊断对象为 v2.4 FFC-style Fourier high enhancer 三组 `best_iou.pt`：
+
+```text
+runs/v2_4_ffc_ablation/nuaa_ffc_residual_gate_none/best_iou.pt
+runs/v2_4_ffc_ablation/nudt_ffc_residual_gate_none/best_iou.pt
+runs/v2_4_ffc_ablation/irstd_ffc_residual_gate_none/best_iou.pt
+```
+
+输出文件：
+
+```text
+docs/diagnostics/feature_statistics/v2_4_ffc/
+docs/visualizations/v2_4_ffc_feature_diagnostics/
+```
+
+每个数据集均生成了全量 test CSV 统计，以及 20 张低频/高频/FFT 诊断图和 `contact_sheet.png`。统计中的 `pred_iou` 与 `pred_has_false_alarm` 是最终预测的样本级指标，在不同 stage 行中重复记录，并不是 stage 自身输出。
+
+### v2.4 FFC best_iou 结果
+
+| Dataset | best epoch | IoU | nIoU | Dice | Pd | Fa |
+|---|---:|---:|---:|---:|---:|---:|
+| NUAA-SIRST | 187 | 0.7391 | 0.7187 | 0.8500 | 0.9582 | 0.000012 |
+| NUDT-SIRST | 474 | 0.8468 | 0.8713 | 0.9170 | 0.9767 | 0.000024 |
+| IRSTD-1K | 325 | 0.5956 | 0.5571 | 0.7466 | 0.8605 | 0.000033 |
+
+### 内部特征统计摘要
+
+| Dataset | Stage | Decoder skip | R_low | R_residual | R_high_raw | residual-low | high_raw-residual fg/bg |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| NUAA-SIRST | 1 | 1 | 0.5292 | 0.6420 | 0.6420 | +0.1129 | +0.0000 |
+| NUAA-SIRST | 2 | 1 | 0.8304 | 0.8022 | 0.7653 | -0.0283 | +1.3689 |
+| NUAA-SIRST | 3 | 0 | 0.5818 | 0.6148 | 0.6012 | +0.0331 | +0.1867 |
+| NUAA-SIRST | 4 | 0 | 0.6466 | 0.5562 | 0.5193 | -0.0903 | +0.0735 |
+| NUDT-SIRST | 1 | 1 | 0.5746 | 0.6659 | 0.6659 | +0.0913 | +0.0000 |
+| NUDT-SIRST | 2 | 1 | 0.8071 | 0.7761 | 0.7223 | -0.0310 | -0.5519 |
+| NUDT-SIRST | 3 | 0 | 0.6809 | 0.5660 | 0.6062 | -0.1148 | +0.1184 |
+| NUDT-SIRST | 4 | 0 | 0.6116 | 0.5312 | 0.5167 | -0.0803 | -0.0070 |
+| IRSTD-1K | 1 | 1 | 0.5807 | 0.6768 | 0.6768 | +0.0961 | +0.0000 |
+| IRSTD-1K | 2 | 1 | 0.8259 | 0.8041 | 0.7651 | -0.0218 | -1.3463 |
+| IRSTD-1K | 3 | 0 | 0.7277 | 0.6934 | 0.6942 | -0.0344 | +0.0464 |
+| IRSTD-1K | 4 | 0 | 0.6965 | 0.5549 | 0.5355 | -0.1416 | -0.0141 |
+
+### 诊断结论
+
+1. Stage-1 residual 是最稳定的高频目标分支。三个数据集 stage-1 均满足 `R_high_residual > R_high_low`，并且 `residual_fg_bg` 明显高于 `low_fg_bg`。这说明浅层 `F - low` 对小目标有清晰选择性，继续保留 stage-1 identity residual skip 是合理的。
+2. Stage-2 FFC 的效果具有数据集差异。NUAA 上 `high_raw_fg_bg - residual_fg_bg = +1.3689`，说明 FFC high_raw 明显增强了目标选择性；但 NUDT 为 `-0.5519`，IRSTD 为 `-1.3463`，说明 FFC 在这两个数据集上反而削弱了 stage-2 residual 的目标/背景区分。
+3. Stage-2 的频谱高频比例并没有被 FFC 放大，反而被压低。三个数据集 stage-2 都有 `R_high_high_raw < R_high_residual`，说明 FFC-style Fourier branch 更像是在做可学习频域重整和平滑，而不是单纯增加高频能量。
+4. Stage-3/4 不作为 decoder high skip 是正确的。统计中 stage-3/4 的 `fg/bg` 普遍接近 1，尤其 stage-4 在 NUDT 和 IRSTD 上低于或接近 1，说明深层 residual/high_raw 更容易混入背景语义，不适合直接作为 decoder high skip。
+5. 当前 v2.4 设置为 `gate_mode: none`，因此 `gate_fg_minus_bg` 约为 0，`high_hat == high_raw`。这组实验主要验证 FFC high_raw 本身，不验证 target-aware gate。
+6. 可视化上，FFT 图显示 stage-1/2 的 residual 和 high_raw 对中心小目标区域更集中；stage-3/4 的 FFT 响应更容易呈现大面积条纹和背景纹理扩散。这与 CSV 中 deep stage `fg/bg` 下降一致。
+
+后续改进方向应避免继续无约束放大深层高频。更合理的方向是：
+
+```text
+stage-1 identity residual skip 保留
+stage-2 FFC/FSRE 只在 foreground-aware 或 mask-aware gate 下使用
+stage-3/4 high_raw 不进入 decoder skip
+对 IRSTD 单独加入背景纹理抑制或 target-aware spectral gate
+```
