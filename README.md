@@ -33,6 +33,9 @@ The v2 implementation keeps SS2D/VMamba-style modeling inside the MIRFD block, n
 - `model.mirfd.block_fusion_high_source`: chooses which high branch enters the MIRFD block main fusion: `high_hat`, `high_raw`, `residual`, or v2.5 `selected_residual`.
 - `model.mirfd.use_context_residual_selector`: enables the v2.5 Context-Guided Residual Selector (CGRS), which uses Mamba context to select target-related residual responses.
 - `model.mirfd.selector_stages`: selects which MIRFD stages use CGRS, e.g. `[2]`.
+- `model.mirfd.selector_use_reference`: enables the v2.5 shallow-reference CGRS path. When this is `true`, MIRFD-Net projects a stage-1 reference to the selected MIRFD stage and passes it into CGRS; missing reference tensors raise an error instead of silently using zeros.
+- `model.mirfd.selector_reference_source`: chooses the stage-1 reference source: `stage1`, `stage1_residual`, or `stage1_high`. The legacy plan key `reference_source` is also accepted.
+- `model.mirfd.selector_reference_hfm`: optionally converts the reference into an average-pooling high-pass residual with `avgpool`; use `none` to pass the source directly. The legacy plan key `reference_hfm` is also accepted.
 - `model.mirfd.gate_mode`: `none`, `suppress`, `enhance`, `half_enhance`, or `centered`; `none` bypasses gate modulation so `high_hat == high_raw`, while `centered` uses `(1 + alpha * (gate - 0.5)) * high_raw`.
 - `model.high_skip_stages`: selects which high responses enter decoder skips; currently only stages `{1, 2, 3}` are valid. Stage-4 `high_hat` is exposed for diagnostics and auxiliary heads, but is not a decoder skip unless bottleneck high injection is implemented.
 - `model.decoder_high_source`: chooses which MIRFD branch enters decoder high skips: `high_raw`, `high_hat`, or `residual`.

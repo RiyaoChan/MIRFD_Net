@@ -197,9 +197,70 @@ def run_v2_config_smoke() -> None:
     print("v2 config smoke ok", details)
 
 
+def run_v2_5_cgrs_smoke() -> None:
+    cfg = deepcopy(load_config(ROOT / "configs" / "v2_5" / "mirfd_nuaa_sirst_ss2d_v2_5_cgrs_supervised.yaml"))
+    cfg["model"]["base_dim"] = 8
+    cfg["model"]["depths"] = [1, 1, 1, 1]
+    cfg["model"]["mamba"]["variant"] = "fallback"
+    cfg["model"]["mamba"]["scan_backend"] = "ref"
+
+    assert cfg["model"]["mirfd"]["block_fusion_high_source"] == "selected_residual"
+    assert cfg["model"]["mirfd"]["use_context_residual_selector"] is True
+    assert cfg["model"]["mirfd"]["selector_stages"] == [2]
+    assert cfg["loss"]["selector_supervision_weight"] == 0.02
+
+    x = torch.randn(2, 1, 64, 64)
+    y = (torch.rand(2, 1, 64, 64) > 0.97).float()
+
+    model = build_model(cfg)
+    assert isinstance(model.stage2.blocks[0].residual_selector, ContextGuidedResidualSelector)
+    assert model.stage3.blocks[0].residual_selector is None
+    assert model.stage4.blocks[0].residual_selector is None
+    outputs = model(x, return_features=True)
+    features = outputs["features"]
+    assert "selected_residual" in features
+    assert "selector" in features
+    assert features["selector_enabled"] == [True, False, False]
+    assert features["selector_reference_used"] == [False, False, False]
+    assert torch.allclose(features["high_for_fusion"][0], features["selected_residual"][0], atol=1e-6)
+
+    loss, details = MIRFDLoss(**cfg["loss"])(outputs, y)
+    assert "selector_aux" in details
+    loss.backward()
+
+    ref_cfg = deepcopy(cfg)
+    ref_cfg["model"]["mirfd"]["selector_use_reference"] = True
+    ref_cfg["model"]["mirfd"]["selector_reference_source"] = "stage1"
+    ref_cfg["model"]["mirfd"]["selector_reference_hfm"] = "avgpool"
+    ref_model = build_model(ref_cfg)
+    assert ref_model.selector_use_reference is True
+    assert "2" in ref_model.selector_reference_projs
+    assert ref_model.stage2.blocks[0].residual_selector.use_reference is True
+    ref_outputs = ref_model(x, return_features=True)
+    ref_features = ref_outputs["features"]
+    assert ref_features["selector_enabled"] == [True, False, False]
+    assert ref_features["selector_reference_used"] == [True, False, False]
+    ref_loss, ref_details = MIRFDLoss(**ref_cfg["loss"])(ref_outputs, y)
+    assert "selector_aux" in ref_details
+    ref_loss.backward()
+
+    try:
+        ref_model.stage2.blocks[0].residual_selector(
+            torch.randn(1, 16, 16, 16),
+            torch.randn(1, 16, 16, 16),
+        )
+    except ValueError as exc:
+        assert "no reference tensor" in str(exc)
+    else:
+        raise AssertionError("reference-enabled CGRS should reject missing reference tensors")
+
+    print("v2.5 cgrs smoke ok", details, ref_details)
+
+
 def main() -> None:
     run_basic_smoke()
     run_v2_config_smoke()
+    run_v2_5_cgrs_smoke()
 
 
 if __name__ == "__main__":

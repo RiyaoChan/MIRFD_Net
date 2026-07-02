@@ -29,6 +29,8 @@ RAW_FIELDNAMES = [
     "stage",
     "stage_enabled",
     "stage_used_as_decoder_skip",
+    "selector_enabled",
+    "selector_reference_used",
     "R_high_low",
     "R_high_residual",
     "R_high_selected_residual",
@@ -54,6 +56,8 @@ RAW_FIELDNAMES = [
 SUMMARY_METRICS = [
     "stage_enabled",
     "stage_used_as_decoder_skip",
+    "selector_enabled",
+    "selector_reference_used",
     "R_high_low",
     "R_high_residual",
     "R_high_selected_residual",
@@ -234,6 +238,17 @@ def _metadata_at(features: dict[str, Any], key: str, stage_index: int | None, de
     return str(values)
 
 
+def _metadata_bool_at(features: dict[str, Any], key: str, stage_index: int | None, default: bool = False) -> bool:
+    values = features.get(key)
+    if values is None:
+        return default
+    if isinstance(values, (list, tuple)):
+        if stage_index is None or stage_index >= len(values):
+            return default
+        return bool(values[stage_index])
+    return bool(values)
+
+
 def response_map(feature: torch.Tensor, is_gate: bool = False) -> torch.Tensor:
     if is_gate:
         return feature.mean(dim=1, keepdim=True)
@@ -399,6 +414,14 @@ def stage_metadata(model: torch.nn.Module, stage: int) -> tuple[int, int]:
     return stage_enabled, stage_used_as_decoder_skip
 
 
+def selector_stage_enabled(model: torch.nn.Module, stage: int) -> int:
+    if stage not in {2, 3, 4}:
+        return 0
+    stage_module = getattr(model, f"stage{stage}", None)
+    blocks = getattr(stage_module, "blocks", [])
+    return int(any(getattr(block, "residual_selector", None) is not None for block in blocks))
+
+
 def write_raw_csv(rows: list[dict[str, Any]], output_csv: Path) -> None:
     ensure_dir(output_csv.parent)
     with output_csv.open("w", newline="", encoding="utf-8") as handle:
@@ -502,6 +525,18 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
 
                 for stage, stage_index in stage_specs:
                     stage_enabled, stage_used_as_decoder_skip = stage_metadata(model, stage)
+                    selector_enabled = (
+                        int(_metadata_bool_at(features, "selector_enabled", stage_index, default=False))
+                        if stage_index is not None
+                        else 0
+                    )
+                    if stage_index is not None and "selector_enabled" not in features:
+                        selector_enabled = selector_stage_enabled(model, stage)
+                    selector_reference_used = (
+                        int(_metadata_bool_at(features, "selector_reference_used", stage_index, default=False))
+                        if stage_index is not None
+                        else 0
+                    )
                     if stage_index is None:
                         low = _sample_feature(_feature_at(features, "stage1_low", 0, warned_keys), batch_index)
                         residual = _sample_feature(_feature_at(features, "stage1_residual", 0, warned_keys), batch_index)
@@ -565,6 +600,8 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                             "stage": stage,
                             "stage_enabled": stage_enabled,
                             "stage_used_as_decoder_skip": stage_used_as_decoder_skip,
+                            "selector_enabled": selector_enabled,
+                            "selector_reference_used": selector_reference_used,
                             "R_high_low": fft_high_ratio(low, args.fft_radius_ratio),
                             "R_high_residual": fft_high_ratio(residual, args.fft_radius_ratio),
                             "R_high_selected_residual": fft_high_ratio(selected_residual, args.fft_radius_ratio),
@@ -615,9 +652,11 @@ def main() -> None:
         gate_delta = _format_csv_value(row.get("mean_gate_fg_minus_bg", float("nan")))
         stage_enabled = _format_csv_value(row.get("mean_stage_enabled", float("nan")))
         used_skip = _format_csv_value(row.get("mean_stage_used_as_decoder_skip", float("nan")))
+        selector_enabled = _format_csv_value(row.get("mean_selector_enabled", float("nan")))
         print(
             f"{dataset} stage-{stage}: "
             f"stage_enabled={stage_enabled}, decoder_skip={used_skip}, "
+            f"selector_enabled={selector_enabled}, "
             f"mean_iou={mean_iou}, fa_rate={fa_rate}, "
             f"R_high residual/low={residual_high}/{low_high}, "
             f"gate_fg_minus_bg={gate_delta}"

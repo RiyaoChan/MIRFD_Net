@@ -331,14 +331,26 @@ class MIRFDBlock(nn.Module):
             return selected_residual
         raise RuntimeError(f"Invalid block_fusion_high_source: {self.block_fusion_high_source}")
 
-    def forward(self, x: torch.Tensor, return_branches: bool = False):
+    def forward(
+        self,
+        x: torch.Tensor,
+        return_branches: bool = False,
+        selector_reference: torch.Tensor | None = None,
+    ):
         low0, low, residual = self._low_and_residual(x)
         high_raw = self._high_branch(residual)
+        selector_enabled = self.residual_selector is not None
+        selector_reference_used = bool(
+            selector_enabled
+            and self.residual_selector is not None
+            and self.residual_selector.use_reference
+            and selector_reference is not None
+        )
         if self.residual_selector is None:
             selected_residual = residual
             selector = torch.ones_like(residual)
         else:
-            selected_residual, selector = self.residual_selector(low, residual)
+            selected_residual, selector = self.residual_selector(low, residual, reference=selector_reference)
         if self.gate is None:
             gate = torch.ones_like(high_raw)
             high_hat = high_raw
@@ -368,6 +380,11 @@ class MIRFDBlock(nn.Module):
                 "residual": residual,
                 "selected_residual": selected_residual,
                 "selector": selector,
+                "selector_enabled": selector_enabled,
+                "selector_use_reference": bool(
+                    self.residual_selector.use_reference if self.residual_selector is not None else False
+                ),
+                "selector_reference_used": selector_reference_used,
                 "gate": gate,
                 "block_fusion_high_source": self.block_fusion_high_source,
             }

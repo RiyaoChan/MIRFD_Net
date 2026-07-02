@@ -1061,3 +1061,13 @@ python -m py_compile ... passed
 python tests/smoke_test.py passed
 v2.5 configs build ok
 ```
+
+### v2.5 implementation correction notes
+
+After the first v2.5 implementation pass, three safeguards were added:
+
+1. `selector_use_reference: true` now requires a real shallow reference tensor. MIRFD-Net builds the reference from stage-1 (`stage1`, `stage1_residual`, or `stage1_high`), optionally applies an avgpool high-pass filter, projects it with `1x1` convolution, resizes it to the selected MIRFD stage, and passes it into CGRS. If a reference-enabled CGRS receives no reference tensor, it raises an error instead of silently using zeros.
+2. `tests/smoke_test.py` now has an explicit `run_v2_5_cgrs_smoke()` path. It loads a real v2.5 CGRS config, checks `block_fusion_high_source=selected_residual`, stage-2 selector enablement, stage-3/4 selector disablement, selector supervision loss, backward propagation, and the real reference path.
+3. `scripts/diagnose_feature_statistics.py` now writes `selector_enabled` and `selector_reference_used`. This prevents stage-3/4 dummy selector maps from being interpreted as active CGRS outputs, and makes later reference-guided diagnostics auditable.
+
+Current running v2.5 experiments still use `selector_use_reference: false`, so they do not need to be restarted for this correction.

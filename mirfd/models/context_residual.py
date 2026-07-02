@@ -39,7 +39,10 @@ class ContextGuidedResidualSelector(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if self.use_reference:
             if reference is None:
-                reference = torch.zeros_like(residual)
+                raise ValueError(
+                    "ContextGuidedResidualSelector was built with use_reference=True, "
+                    "but no reference tensor was provided."
+                )
             x = torch.cat([low, residual, reference], dim=1)
         else:
             x = torch.cat([low, residual], dim=1)

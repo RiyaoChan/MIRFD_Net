@@ -136,6 +136,15 @@ def metadata_at(features: dict[str, Any], key: str, stage_index: int, default: s
     return str(values)
 
 
+def metadata_bool_at(features: dict[str, Any], key: str, stage_index: int, default: bool = False) -> bool:
+    values = features.get(key)
+    if values is None:
+        return default
+    if isinstance(values, (list, tuple)):
+        return bool(values[stage_index]) if stage_index < len(values) else default
+    return bool(values)
+
+
 def denormalized_image(image: torch.Tensor, batch_index: int, data_cfg: dict[str, Any]) -> np.ndarray:
     arr = image[batch_index, 0].detach().float().cpu().numpy()
     normalize = data_cfg.get("normalize")
@@ -250,6 +259,13 @@ def render_sample(
         gate = gate_response(feature_at(features, "gate", stage_index), batch_index)
         selector = gate_response(feature_at(features, "selector", stage_index), batch_index)
         source = metadata_at(features, "block_fusion_high_source", stage_index, default="?")
+        selector_enabled = metadata_bool_at(features, "selector_enabled", stage_index, default=False)
+        selector_ref = metadata_bool_at(features, "selector_reference_used", stage_index, default=False)
+        selector_label = f"{stage_name} selector"
+        if not selector_enabled:
+            selector_label += " off"
+        elif selector_ref:
+            selector_label += " ref"
 
         low_min, low_max = value_range([low0, low])
         high_min, high_max = value_range([residual, selected_residual, high_raw, high_hat, high_for_fusion])
@@ -262,7 +278,7 @@ def render_sample(
                     to_heatmap(selected_residual, cell_size, f"{stage_name} selected", high_min, high_max),
                     to_heatmap(high_raw, cell_size, f"{stage_name} high_raw", high_min, high_max),
                     to_heatmap(high_for_fusion, cell_size, f"{stage_name} fusion:{source}", high_min, high_max),
-                    to_heatmap(selector, cell_size, f"{stage_name} selector", 0.0, 1.0),
+                    to_heatmap(selector, cell_size, selector_label, 0.0, 1.0),
                 ],
                 axis=1,
             )
