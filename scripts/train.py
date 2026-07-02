@@ -205,6 +205,7 @@ def main() -> None:
         or loss_cfg.get("spectral_high_weight", 0.0) > 0.0
         or loss_cfg.get("gate_aux_weight", 0.0) > 0.0
         or loss_cfg.get("gate_bg_weight", 0.0) > 0.0
+        or loss_cfg.get("selector_supervision_weight", 0.0) > 0.0
     )
     clip_grad_norm = train_cfg.get("clip_grad_norm", train_cfg.get("grad_clip_norm"))
 

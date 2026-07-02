@@ -1,0 +1,120 @@
+data:
+  augment: true
+  augmentation_mode: sctransnet
+  crop_size:
+  - 256
+  - 256
+  image_dir: images
+  mask_dir: masks
+  normalize:
+    mean: 87.4661865234375
+    std: 39.71953201293945
+  num_workers: 4
+  positive_crop_prob: 0.5
+  resize: null
+  root: /DATA20T/bip/cry/code/SIRST-5K-main/dataset/IRSTD-1k
+  test_resize:
+  - 256
+  - 256
+  test_split_file: 50_50/test.txt
+  train_split_file: 50_50/train.txt
+  val_resize:
+  - 256
+  - 256
+  val_split_file: 50_50/test.txt
+loss:
+  aux_weight: 0.0
+  bce_weight: 1.0
+  dice_weight: 1.0
+  gate_aux_weight: 0.0
+  gate_bg_weight: 0.0
+  spectral_high_target: high_raw
+  spectral_high_weight: 0.0
+  spectral_low_radius_ratio: 0.25
+  spectral_low_weight: 0.0
+  selector_supervision_weight: 0.0
+  selector_supervision_stages:
+  - 2
+  selector_target_dilate: 1
+metrics:
+  pd_fa_distance: 3.0
+  pd_fa_mode: centroid
+  threshold: 0.5
+model:
+  base_dim: 32
+  decoder:
+    use_high_residual_skip: true
+  decoder_high_source: high_raw
+  depths:
+  - 1
+  - 1
+  - 2
+  - 2
+  high_skip_stages:
+  - 1
+  - 2
+  in_channels: 1
+  mamba:
+    bias: false
+    conv_bias: true
+    conv_kernel: 3
+    d_state: 16
+    dropout: 0.0
+    dt_init: random
+    dt_init_floor: 0.0001
+    dt_max: 0.1
+    dt_min: 0.001
+    dt_rank: auto
+    dt_scale: 1.0
+    expansion: 2.0
+    scan_backend: cuda
+    variant: ss2d
+  mirfd:
+    fsre_gamma_init: 0.1
+    fsre_num_bands: 4
+    fsre_window_size: 8
+    fusion: concat
+    gate_alpha_init: 1.0
+    gate_mode: none
+    gate_scale_max: 1.75
+    gate_scale_min: 0.25
+    hfe_kernels:
+    - 3
+    - 5
+    high_enhancer_type: identity
+    high_residual_mode: hfe
+    low_smooth_beta_init: 0.3
+    pre_norm: layer
+    residual_type: mamba_residual
+    use_gate: true
+    use_learnable_gamma: false
+    use_low_smooth: true
+    block_fusion_high_source: selected_residual
+    use_context_residual_selector: true
+    selector_stages:
+    - 2
+    selector_gamma_init: 0.1
+    selector_use_reference: false
+  norm: batch
+  num_classes: 1
+  stage1_high_enhancer_type: identity
+  use_aux_heads: false
+  use_stage1_high_skip: true
+seed: 42
+train:
+  amp: true
+  batch_size: 16
+  betas:
+  - 0.9
+  - 0.999
+  clip_grad_norm: 1.0
+  epochs: 500
+  eps: 1.0e-08
+  eta_min: 5.0e-06
+  eval_batch_size: 16
+  lr: 0.0005
+  optimizer: AdamW
+  scheduler: cosine_warmup
+  scheduler_step: iter
+  warmup_epochs: 10
+  weight_decay: 0.01

@@ -16,6 +16,17 @@ def _target_like(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     return target
 
 
+def _dilate_target(target: torch.Tensor, radius: int) -> torch.Tensor:
+    if target.ndim == 3:
+        target = target.unsqueeze(1)
+    target = target.float()
+    radius = int(radius)
+    if radius <= 0:
+        return target
+    kernel_size = 2 * radius + 1
+    return F.max_pool2d(target, kernel_size=kernel_size, stride=1, padding=radius)
+
+
 def dice_loss_from_logits(logits: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     target = _target_like(logits, target)
     prob = torch.sigmoid(logits)
@@ -103,9 +114,19 @@ class MIRFDLoss(nn.Module):
         spectral_high_target: str = "high_raw",
         gate_aux_weight: float = 0.0,
         gate_bg_weight: float = 0.0,
+        selector_supervision_weight: float = 0.0,
+        selector_supervision_stages: Iterable[int] | None = None,
+        selector_target_dilate: int = 1,
     ) -> None:
         super().__init__()
-        if spectral_high_target not in {"high", "high_for_fusion", "high_hat", "high_raw", "residual"}:
+        if spectral_high_target not in {
+            "high",
+            "high_for_fusion",
+            "high_hat",
+            "high_raw",
+            "residual",
+            "selected_residual",
+        }:
             raise ValueError(f"Unsupported spectral_high_target: {spectral_high_target}")
         self.bce_weight = bce_weight
         self.dice_weight = dice_weight
@@ -116,6 +137,9 @@ class MIRFDLoss(nn.Module):
         self.spectral_high_target = spectral_high_target
         self.gate_aux_weight = gate_aux_weight
         self.gate_bg_weight = gate_bg_weight
+        self.selector_supervision_weight = float(selector_supervision_weight)
+        self.selector_supervision_stages = tuple(int(stage) for stage in (selector_supervision_stages or (2,)))
+        self.selector_target_dilate = int(selector_target_dilate)
 
     def forward(self, outputs, target: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
         logits = outputs["logits"] if isinstance(outputs, dict) else outputs
@@ -157,7 +181,8 @@ class MIRFDLoss(nn.Module):
                     gate_map = gate.float().mean(dim=1, keepdim=True).clamp(1e-6, 1.0 - 1e-6)
                     target_s = _target_like(gate_map, target)
                     if self.gate_aux_weight > 0.0:
-                        aux_terms.append(F.binary_cross_entropy(gate_map, target_s))
+                        with torch.amp.autocast(device_type=gate_map.device.type, enabled=False):
+                            aux_terms.append(F.binary_cross_entropy(gate_map.float(), target_s.float()))
                     if self.gate_bg_weight > 0.0:
                         bg = 1.0 - target_s
                         bg_terms.append((gate_map * bg).sum() / (bg.sum() + 1e-6))
@@ -169,6 +194,31 @@ class MIRFDLoss(nn.Module):
                     gate_bg = torch.stack(bg_terms).mean()
                     loss = loss + self.gate_bg_weight * gate_bg
                     details["gate_bg"] = float(gate_bg.detach().cpu())
+
+        if (
+            isinstance(outputs, dict)
+            and self.selector_supervision_weight > 0.0
+            and "features" in outputs
+        ):
+            selectors = outputs["features"].get("selector", [])
+            if not isinstance(selectors, (list, tuple)):
+                selectors = [selectors]
+            stage_to_index = {2: 0, 3: 1, 4: 2}
+            selector_terms = []
+            target_dilated = _dilate_target(target, self.selector_target_dilate)
+            for stage in self.selector_supervision_stages:
+                index = stage_to_index.get(int(stage))
+                if index is None or index >= len(selectors) or selectors[index] is None:
+                    continue
+                selector = selectors[index].float().mean(dim=1, keepdim=True).clamp(1e-6, 1.0 - 1e-6)
+                target_s = F.interpolate(target_dilated, size=selector.shape[-2:], mode="area")
+                target_s = (target_s > 0.0).float()
+                with torch.amp.autocast(device_type=selector.device.type, enabled=False):
+                    selector_terms.append(F.binary_cross_entropy(selector.float(), target_s.float()))
+            if selector_terms:
+                selector_aux = torch.stack(selector_terms).mean()
+                loss = loss + self.selector_supervision_weight * selector_aux
+                details["selector_aux"] = float(selector_aux.detach().cpu())
 
         details["total"] = float(loss.detach().cpu())
         return loss, details

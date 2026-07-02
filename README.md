@@ -30,15 +30,18 @@ The v2 implementation keeps SS2D/VMamba-style modeling inside the MIRFD block, n
 - `model.mirfd.use_low_smooth`: applies lightweight low-pass calibration to the Mamba-induced low representation.
 - `model.mirfd.high_residual_mode`: `hfe`, `concat_proj`, `add`, or `add_scaled`; `add_scaled` uses `residual + gamma * HFE(residual)`.
 - `model.mirfd.high_enhancer_type`: `identity`, `conv_hfe`, `freq_window`, or `ffc`; `freq_window` enables local-window Frequency-Selective Residual Enhancer (FSRE), while `ffc` enables an SCTransNet/FFC-style global Fourier residual enhancer.
-- `model.mirfd.block_fusion_high_source`: chooses which high branch enters the MIRFD block main fusion: `high_hat`, `high_raw`, or `residual`.
+- `model.mirfd.block_fusion_high_source`: chooses which high branch enters the MIRFD block main fusion: `high_hat`, `high_raw`, `residual`, or v2.5 `selected_residual`.
+- `model.mirfd.use_context_residual_selector`: enables the v2.5 Context-Guided Residual Selector (CGRS), which uses Mamba context to select target-related residual responses.
+- `model.mirfd.selector_stages`: selects which MIRFD stages use CGRS, e.g. `[2]`.
 - `model.mirfd.gate_mode`: `none`, `suppress`, `enhance`, `half_enhance`, or `centered`; `none` bypasses gate modulation so `high_hat == high_raw`, while `centered` uses `(1 + alpha * (gate - 0.5)) * high_raw`.
 - `model.high_skip_stages`: selects which high responses enter decoder skips; currently only stages `{1, 2, 3}` are valid. Stage-4 `high_hat` is exposed for diagnostics and auxiliary heads, but is not a decoder skip unless bottleneck high injection is implemented.
 - `model.decoder_high_source`: chooses which MIRFD branch enters decoder high skips: `high_raw`, `high_hat`, or `residual`.
 - `model.stage1_high_enhancer_type`: chooses the stage-1 high skip enhancer independently: `identity`, `conv_hfe`, `freq_window`, or `ffc`.
 - `model.use_stage1_high_skip`: legacy switch for adding shallow high-frequency skip information when `high_skip_stages` is not set.
 - `model.use_aux_heads`: when enabled, auxiliary heads still supervise b2/b3/b4 `high_hat`; this is separate from whether a stage is used as a decoder high skip.
-- `loss.spectral_high_target`: chooses `residual`, `high_raw`, `high_hat`, or `high_for_fusion` for high-branch spectral regularization.
+- `loss.spectral_high_target`: chooses `residual`, `selected_residual`, `high_raw`, `high_hat`, or `high_for_fusion` for high-branch spectral regularization.
 - `loss.gate_aux_weight` / `loss.gate_bg_weight`: optional light supervision for gate target-awareness.
+- `loss.selector_supervision_weight`: optional weak supervision for the v2.5 CGRS selector map after GT dilation and area downsampling.
 
 Ready-to-run v2 configs:
 

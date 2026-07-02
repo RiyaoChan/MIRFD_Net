@@ -213,7 +213,7 @@ def render_sample(
                     to_heatmap(residual, cell_size, "S1 residual", high_min, high_max),
                     to_heatmap(high, cell_size, "S1 high/source", high_min, high_max),
                     blank_panel(cell_size, "S1 no gate"),
-                    blank_panel(cell_size, "S1 no high_hat"),
+                    blank_panel(cell_size, "S1 no selector"),
                     to_heatmap(high, cell_size, "S1 high_for_fusion", high_min, high_max),
                     blank_panel(cell_size, "stage-1"),
                 ],
@@ -243,24 +243,26 @@ def render_sample(
         low0 = tensor_response(feature_at(features, "low0", stage_index), batch_index)
         low = tensor_response(feature_at(features, "low", stage_index), batch_index)
         residual = tensor_response(feature_at(features, "residual", stage_index), batch_index)
+        selected_residual = tensor_response(feature_at(features, "selected_residual", stage_index), batch_index)
         high_raw = tensor_response(feature_at(features, "high_raw", stage_index), batch_index)
         high_hat = tensor_response(feature_at(features, "high_hat", stage_index), batch_index)
         high_for_fusion = tensor_response(feature_at(features, "high_for_fusion", stage_index), batch_index)
         gate = gate_response(feature_at(features, "gate", stage_index), batch_index)
+        selector = gate_response(feature_at(features, "selector", stage_index), batch_index)
         source = metadata_at(features, "block_fusion_high_source", stage_index, default="?")
 
         low_min, low_max = value_range([low0, low])
-        high_min, high_max = value_range([residual, high_raw, high_hat, high_for_fusion])
+        high_min, high_max = value_range([residual, selected_residual, high_raw, high_hat, high_for_fusion])
         rows.append(
             np.concatenate(
                 [
                     to_heatmap(low0, cell_size, f"{stage_name} low0", low_min, low_max),
                     to_heatmap(low, cell_size, f"{stage_name} low", low_min, low_max),
                     to_heatmap(residual, cell_size, f"{stage_name} residual", high_min, high_max),
+                    to_heatmap(selected_residual, cell_size, f"{stage_name} selected", high_min, high_max),
                     to_heatmap(high_raw, cell_size, f"{stage_name} high_raw", high_min, high_max),
-                    to_heatmap(high_hat, cell_size, f"{stage_name} high_hat", high_min, high_max),
                     to_heatmap(high_for_fusion, cell_size, f"{stage_name} fusion:{source}", high_min, high_max),
-                    to_heatmap(gate, cell_size, f"{stage_name} gate", 0.0, 1.0),
+                    to_heatmap(selector, cell_size, f"{stage_name} selector", 0.0, 1.0),
                 ],
                 axis=1,
             )
@@ -268,17 +270,20 @@ def render_sample(
 
         fft_low = fft_response(feature_at(features, "low", stage_index), batch_index)
         fft_residual = fft_response(feature_at(features, "residual", stage_index), batch_index)
+        fft_selected_residual = fft_response(feature_at(features, "selected_residual", stage_index), batch_index)
         fft_high_raw = fft_response(feature_at(features, "high_raw", stage_index), batch_index)
         fft_high_hat = fft_response(feature_at(features, "high_hat", stage_index), batch_index)
         fft_high_for_fusion = fft_response(feature_at(features, "high_for_fusion", stage_index), batch_index)
-        fft_min, fft_max = value_range([fft_low, fft_residual, fft_high_raw, fft_high_hat, fft_high_for_fusion])
+        fft_min, fft_max = value_range(
+            [fft_low, fft_residual, fft_selected_residual, fft_high_raw, fft_high_hat, fft_high_for_fusion]
+        )
         rows.append(
             np.concatenate(
                 [
                     to_heatmap(fft_low, cell_size, f"FFT {stage_name} low", fft_min, fft_max),
                     to_heatmap(fft_residual, cell_size, f"FFT {stage_name} residual", fft_min, fft_max),
+                    to_heatmap(fft_selected_residual, cell_size, f"FFT {stage_name} selected", fft_min, fft_max),
                     to_heatmap(fft_high_raw, cell_size, f"FFT {stage_name} high_raw", fft_min, fft_max),
-                    to_heatmap(fft_high_hat, cell_size, f"FFT {stage_name} high_hat", fft_min, fft_max),
                     to_heatmap(fft_high_for_fusion, cell_size, f"FFT {stage_name} fusion", fft_min, fft_max),
                     blank_panel(cell_size, "log magnitude"),
                     blank_panel(cell_size, f"FFT {stage_name}"),

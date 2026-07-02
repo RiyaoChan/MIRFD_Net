@@ -31,16 +31,21 @@ RAW_FIELDNAMES = [
     "stage_used_as_decoder_skip",
     "R_high_low",
     "R_high_residual",
+    "R_high_selected_residual",
     "R_high_high_raw",
     "R_high_high_hat",
     "R_high_high_for_fusion",
     "low_fg_bg",
     "residual_fg_bg",
+    "selected_residual_fg_bg",
     "high_raw_fg_bg",
+    "selector_fg_bg",
     "gate_fg_bg",
     "high_hat_fg_bg",
     "high_for_fusion_fg_bg",
     "gate_fg_minus_bg",
+    "selector_fg_minus_bg",
+    "low_residual_delta",
     "block_fusion_high_source",
     "pred_iou",
     "pred_has_false_alarm",
@@ -51,16 +56,21 @@ SUMMARY_METRICS = [
     "stage_used_as_decoder_skip",
     "R_high_low",
     "R_high_residual",
+    "R_high_selected_residual",
     "R_high_high_raw",
     "R_high_high_hat",
     "R_high_high_for_fusion",
     "low_fg_bg",
     "residual_fg_bg",
+    "selected_residual_fg_bg",
     "high_raw_fg_bg",
+    "selector_fg_bg",
     "gate_fg_bg",
     "high_hat_fg_bg",
     "high_for_fusion_fg_bg",
     "gate_fg_minus_bg",
+    "selector_fg_minus_bg",
+    "low_residual_delta",
     "pred_iou",
 ]
 
@@ -183,7 +193,17 @@ def _has_stage1_features(features: dict[str, Any]) -> bool:
 
 def _stage_count(features: dict[str, Any]) -> int:
     counts = []
-    for key in ("low", "residual", "high_raw", "high_hat", "high_for_fusion", "high", "gate"):
+    for key in (
+        "low",
+        "residual",
+        "selected_residual",
+        "selector",
+        "high_raw",
+        "high_hat",
+        "high_for_fusion",
+        "high",
+        "gate",
+    ):
         values = features.get(key)
         if isinstance(values, (list, tuple)):
             counts.append(len(values))
@@ -485,14 +505,20 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                     if stage_index is None:
                         low = _sample_feature(_feature_at(features, "stage1_low", 0, warned_keys), batch_index)
                         residual = _sample_feature(_feature_at(features, "stage1_residual", 0, warned_keys), batch_index)
+                        selected_residual = residual
                         high_raw = _sample_feature(_feature_at(features, "stage1_high", 0, warned_keys), batch_index)
                         high_hat = high_raw
                         high_for_fusion = high_raw
                         gate = None
+                        selector = None
                         block_fusion_high_source = "stage1"
                     else:
                         low = _sample_feature(_feature_at(features, "low", stage_index, warned_keys), batch_index)
                         residual = _sample_feature(_feature_at(features, "residual", stage_index, warned_keys), batch_index)
+                        selected_residual = _sample_feature(
+                            _feature_at(features, "selected_residual", stage_index, warned_keys),
+                            batch_index,
+                        )
                         high_raw = _sample_feature(_feature_at(features, "high_raw", stage_index, warned_keys), batch_index)
                         high_hat = _sample_feature(_feature_at(features, "high_hat", stage_index, warned_keys), batch_index)
                         high_for_fusion = _sample_feature(
@@ -500,6 +526,7 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                             batch_index,
                         )
                         gate = _sample_feature(_feature_at(features, "gate", stage_index, warned_keys), batch_index)
+                        selector = _sample_feature(_feature_at(features, "selector", stage_index, warned_keys), batch_index)
                         block_fusion_high_source = _metadata_at(
                             features,
                             "block_fusion_high_source",
@@ -515,6 +542,7 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                             stacklevel=2,
                         )
                     residual_fg_bg, _, _, _, _ = fg_bg_stats(residual, sample_mask, is_gate=False)
+                    selected_residual_fg_bg, _, _, _, _ = fg_bg_stats(selected_residual, sample_mask, is_gate=False)
                     high_raw_fg_bg, _, _, _, _ = fg_bg_stats(high_raw, sample_mask, is_gate=False)
                     high_hat_fg_bg, _, _, _, _ = fg_bg_stats(high_hat, sample_mask, is_gate=False)
                     high_for_fusion_fg_bg, _, _, _, _ = fg_bg_stats(high_for_fusion, sample_mask, is_gate=False)
@@ -523,6 +551,12 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                         gate_fg_minus_bg = float("nan")
                     else:
                         gate_fg_bg, gate_fg_minus_bg, _, _, _ = fg_bg_stats(gate, sample_mask, is_gate=True)
+                    if selector is None:
+                        selector_fg_bg = float("nan")
+                        selector_fg_minus_bg = float("nan")
+                    else:
+                        selector_fg_bg, selector_fg_minus_bg, _, _, _ = fg_bg_stats(selector, sample_mask, is_gate=True)
+                    low_residual_delta = residual_fg_bg - low_fg_bg
 
                     rows.append(
                         {
@@ -533,16 +567,21 @@ def diagnose(args: argparse.Namespace) -> tuple[Path, Path, list[dict[str, Any]]
                             "stage_used_as_decoder_skip": stage_used_as_decoder_skip,
                             "R_high_low": fft_high_ratio(low, args.fft_radius_ratio),
                             "R_high_residual": fft_high_ratio(residual, args.fft_radius_ratio),
+                            "R_high_selected_residual": fft_high_ratio(selected_residual, args.fft_radius_ratio),
                             "R_high_high_raw": fft_high_ratio(high_raw, args.fft_radius_ratio),
                             "R_high_high_hat": fft_high_ratio(high_hat, args.fft_radius_ratio),
                             "R_high_high_for_fusion": fft_high_ratio(high_for_fusion, args.fft_radius_ratio),
                             "low_fg_bg": low_fg_bg,
                             "residual_fg_bg": residual_fg_bg,
+                            "selected_residual_fg_bg": selected_residual_fg_bg,
                             "high_raw_fg_bg": high_raw_fg_bg,
+                            "selector_fg_bg": selector_fg_bg,
                             "gate_fg_bg": gate_fg_bg,
                             "high_hat_fg_bg": high_hat_fg_bg,
                             "high_for_fusion_fg_bg": high_for_fusion_fg_bg,
                             "gate_fg_minus_bg": gate_fg_minus_bg,
+                            "selector_fg_minus_bg": selector_fg_minus_bg,
+                            "low_residual_delta": low_residual_delta,
                             "block_fusion_high_source": block_fusion_high_source,
                             "pred_iou": pred_iou,
                             "pred_has_false_alarm": pred_has_fa,

@@ -7,6 +7,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from .layers import ConvNormAct, make_norm
+from .context_residual import ContextGuidedResidualSelector
 from .frequency_enhancer import FFCFrequencyResidualEnhancer, FrequencySelectiveResidualEnhancer
 from .ss2d import build_mamba_block
 
@@ -120,7 +121,7 @@ class MIRFDBlock(nn.Module):
     SUPPORTED_HIGH_RESIDUAL_MODES = {"hfe", "concat_proj", "add", "add_scaled"}
     SUPPORTED_GATE_MODES = {"none", "suppress", "enhance", "half_enhance", "centered"}
     SUPPORTED_HIGH_ENHANCERS = {"identity", "conv_hfe", "freq_window", "ffc"}
-    SUPPORTED_BLOCK_FUSION_HIGH_SOURCES = {"high_hat", "high_raw", "residual"}
+    SUPPORTED_BLOCK_FUSION_HIGH_SOURCES = {"high_hat", "high_raw", "residual", "selected_residual"}
 
     def __init__(
         self,
@@ -153,6 +154,9 @@ class MIRFDBlock(nn.Module):
         gate_alpha_init: float = 1.0,
         gate_scale_min: float = 0.25,
         gate_scale_max: float = 1.75,
+        use_context_residual_selector: bool = False,
+        selector_gamma_init: float = 0.1,
+        selector_use_reference: bool = False,
     ) -> None:
         super().__init__()
         if residual_type not in self.SUPPORTED_RESIDUALS:
@@ -182,6 +186,7 @@ class MIRFDBlock(nn.Module):
         self.high_residual_mode = high_residual_mode
         self.high_enhancer_type = high_enhancer_type
         self.block_fusion_high_source = block_fusion_high_source
+        self.use_context_residual_selector = bool(use_context_residual_selector)
         self.gate_mode = gate_mode
         self.gate_scale_min = float(gate_scale_min)
         self.gate_scale_max = float(gate_scale_max)
@@ -216,6 +221,16 @@ class MIRFDBlock(nn.Module):
             self.hfe_scale = nn.Parameter(torch.tensor(float(hfe_scale_init)))
         self.gate = TargetAwareGate(dim, norm=norm) if use_gate and gate_mode != "none" else None
         self.gate_alpha = nn.Parameter(torch.tensor(float(gate_alpha_init)))
+        self.residual_selector = (
+            ContextGuidedResidualSelector(
+                dim,
+                use_reference=selector_use_reference,
+                gamma_init=selector_gamma_init,
+                norm=norm,
+            )
+            if use_context_residual_selector
+            else None
+        )
 
         if fusion == "concat":
             self.fuse = ConvNormAct(dim * 2, dim, kernel_size=1, padding=0, norm=norm)
@@ -304,6 +319,7 @@ class MIRFDBlock(nn.Module):
         residual: torch.Tensor,
         high_raw: torch.Tensor,
         high_hat: torch.Tensor,
+        selected_residual: torch.Tensor,
     ) -> torch.Tensor:
         if self.block_fusion_high_source == "high_hat":
             return high_hat
@@ -311,11 +327,18 @@ class MIRFDBlock(nn.Module):
             return high_raw
         if self.block_fusion_high_source == "residual":
             return residual
+        if self.block_fusion_high_source == "selected_residual":
+            return selected_residual
         raise RuntimeError(f"Invalid block_fusion_high_source: {self.block_fusion_high_source}")
 
     def forward(self, x: torch.Tensor, return_branches: bool = False):
         low0, low, residual = self._low_and_residual(x)
         high_raw = self._high_branch(residual)
+        if self.residual_selector is None:
+            selected_residual = residual
+            selector = torch.ones_like(residual)
+        else:
+            selected_residual, selector = self.residual_selector(low, residual)
         if self.gate is None:
             gate = torch.ones_like(high_raw)
             high_hat = high_raw
@@ -326,6 +349,7 @@ class MIRFDBlock(nn.Module):
             residual=residual,
             high_raw=high_raw,
             high_hat=high_hat,
+            selected_residual=selected_residual,
         )
 
         if self.fusion == "concat":
@@ -342,6 +366,8 @@ class MIRFDBlock(nn.Module):
                 "high_raw": high_raw,
                 "high_hat": high_hat,
                 "residual": residual,
+                "selected_residual": selected_residual,
+                "selector": selector,
                 "gate": gate,
                 "block_fusion_high_source": self.block_fusion_high_source,
             }

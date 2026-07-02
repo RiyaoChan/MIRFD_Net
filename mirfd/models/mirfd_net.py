@@ -23,9 +23,16 @@ class ConvStage(nn.Module):
 
 
 class MIRFDStage(nn.Module):
-    def __init__(self, dim: int, depth: int, block_kwargs: dict[str, Any]) -> None:
+    def __init__(self, dim: int, depth: int, block_kwargs: dict[str, Any], stage: int) -> None:
         super().__init__()
-        self.blocks = nn.ModuleList([MIRFDBlock(dim, **block_kwargs) for _ in range(depth)])
+        kwargs = dict(block_kwargs)
+        selector_stages = kwargs.pop("selector_stages", None)
+        if selector_stages is not None:
+            selector_enabled = int(stage) in {int(item) for item in selector_stages}
+            kwargs["use_context_residual_selector"] = bool(
+                kwargs.get("use_context_residual_selector", False) and selector_enabled
+            )
+        self.blocks = nn.ModuleList([MIRFDBlock(dim, **kwargs) for _ in range(depth)])
 
     def forward(self, x: torch.Tensor, return_branches: bool = False):
         last = None
@@ -43,6 +50,8 @@ class MIRFDStage(nn.Module):
                     "high_for_fusion": torch.zeros_like(x),
                     "high_raw": torch.zeros_like(x),
                     "high_hat": torch.zeros_like(x),
+                    "selected_residual": torch.zeros_like(x),
+                    "selector": torch.ones_like(x),
                     "residual": torch.zeros_like(x),
                     "gate": torch.ones_like(x),
                     "block_fusion_high_source": "high_hat",
@@ -163,13 +172,13 @@ class MIRFDNet(nn.Module):
             self.stage1_hfe = nn.Identity()
 
         self.down12 = ConvNormAct(dims[0], dims[1], kernel_size=3, stride=2, norm=norm)
-        self.stage2 = MIRFDStage(dims[1], depths[1], block_kwargs)
+        self.stage2 = MIRFDStage(dims[1], depths[1], block_kwargs, stage=2)
 
         self.down23 = ConvNormAct(dims[1], dims[2], kernel_size=3, stride=2, norm=norm)
-        self.stage3 = MIRFDStage(dims[2], depths[2], block_kwargs)
+        self.stage3 = MIRFDStage(dims[2], depths[2], block_kwargs, stage=3)
 
         self.down34 = ConvNormAct(dims[2], dims[3], kernel_size=3, stride=2, norm=norm)
-        self.stage4 = MIRFDStage(dims[3], depths[3], block_kwargs)
+        self.stage4 = MIRFDStage(dims[3], depths[3], block_kwargs, stage=4)
 
         self.dec3 = DecoderBlock(dims[3], dims[2], dims[2], use_high_residual_skip, norm=norm)
         self.dec2 = DecoderBlock(dims[2], dims[1], dims[1], use_high_residual_skip, norm=norm)
@@ -239,6 +248,8 @@ class MIRFDNet(nn.Module):
                 "high_raw": [b2["high_raw"], b3["high_raw"], b4["high_raw"]],
                 "high_hat": [b2["high_hat"], b3["high_hat"], b4["high_hat"]],
                 "residual": [b2["residual"], b3["residual"], b4["residual"]],
+                "selected_residual": [b2["selected_residual"], b3["selected_residual"], b4["selected_residual"]],
+                "selector": [b2["selector"], b3["selector"], b4["selector"]],
                 "gate": [b2["gate"], b3["gate"], b4["gate"]],
                 "block_fusion_high_source": [
                     b2["block_fusion_high_source"],
@@ -289,6 +300,10 @@ def build_model(config: dict[str, Any] | None = None) -> MIRFDNet:
         "gate_alpha_init": mirfd_cfg.get("gate_alpha_init", 1.0),
         "gate_scale_min": mirfd_cfg.get("gate_scale_min", 0.25),
         "gate_scale_max": mirfd_cfg.get("gate_scale_max", 1.75),
+        "use_context_residual_selector": mirfd_cfg.get("use_context_residual_selector", False),
+        "selector_stages": mirfd_cfg.get("selector_stages"),
+        "selector_gamma_init": mirfd_cfg.get("selector_gamma_init", 0.1),
+        "selector_use_reference": mirfd_cfg.get("selector_use_reference", False),
         "mamba_kwargs": {
             "variant": mamba_cfg.get("variant", "fallback"),
             "expansion": mamba_cfg.get("expansion", 2.0),

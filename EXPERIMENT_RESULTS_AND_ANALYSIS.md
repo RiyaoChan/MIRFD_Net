@@ -944,3 +944,120 @@ stage-2 FFC/FSRE 只在 foreground-aware 或 mask-aware gate 下使用
 stage-3/4 high_raw 不进入 decoder skip
 对 IRSTD 单独加入背景纹理抑制或 target-aware spectral gate
 ```
+## 16. MIRFD-Net v2.5 Context-Guided Residual Selector Plan（2026-07-02）
+
+根据 `MIRFD_Net_v2_5_context_residual_reference_plan.md`，本轮不再把主线继续写成“更强高频增强”。前面 v2.2/v2.3/v2.4 的统计说明：
+
+1. `low` 更准确是 Mamba/SS2D-induced context representation，不是纯低频。
+2. `residual = F - low` 更准确是 context-discrepancy residual，不是纯高频。
+3. Conv-HFE、FSRE、FFC 这类 high enhancer 对三个数据集没有稳定一致收益。
+4. 当前最稳定结构仍是保守使用 residual：`block_fusion_high_source: residual`、`gate_mode: none`、`high_skip_stages: [1, 2]`。
+
+因此 v2.5 第一轮采用两个方案：
+
+### Phase A: Branch Role Diagnostics
+
+新增 `scripts/train_branch_probe.py`，冻结训练好的 MIRFDNet，只训练轻量 probe head，比较不同 stage/branch 的独立分割潜力：
+
+```text
+low
+residual
+high_raw
+low_residual
+low_high_raw
+low_residual_high_raw
+```
+
+首轮对 v2.3 `block_residual_gate_none` 的 best checkpoint 做 stage-1/2/3 probe，输出：
+
+```text
+docs/diagnostics/branch_probe/v2_5/
+```
+
+这个实验用于回答：
+
+```text
+low 是否仍有独立小目标分割能力？
+low + residual 是否优于 residual-only？
+high_raw 是否真的比 residual 更适合作为 decoder 信息？
+```
+
+### Phase B/C: Context-Guided Residual Selector
+
+新增 `mirfd/models/context_residual.py`：
+
+```text
+ContextGuidedResidualSelector(low, residual)
+selector = sigmoid(DWConv(Conv1x1([low, residual])))
+selected_residual = residual + gamma * (selector - 0.5) * residual
+```
+
+采用 residual-style 形式而不是 `selector * residual`，目的是让初始状态接近 identity，避免 selector 训练初期错误压制小目标。
+
+已接入：
+
+```text
+mirfd/models/mirfd_block.py
+mirfd/models/mirfd_net.py
+mirfd/losses.py
+scripts/diagnose_feature_statistics.py
+scripts/visualize_feature_diagnostics.py
+tests/smoke_test.py
+```
+
+新增配置：
+
+```text
+configs/v2_5/mirfd_nuaa_sirst_ss2d_v2_5_cgrs_unsupervised.yaml
+configs/v2_5/mirfd_nudt_sirst_ss2d_v2_5_cgrs_unsupervised.yaml
+configs/v2_5/mirfd_irstd_1k_ss2d_v2_5_cgrs_unsupervised.yaml
+configs/v2_5/mirfd_nuaa_sirst_ss2d_v2_5_cgrs_supervised.yaml
+configs/v2_5/mirfd_nudt_sirst_ss2d_v2_5_cgrs_supervised.yaml
+configs/v2_5/mirfd_irstd_1k_ss2d_v2_5_cgrs_supervised.yaml
+```
+
+首轮 CGRS 设置：
+
+```yaml
+model:
+  high_skip_stages: [1, 2]
+  decoder_high_source: high_raw
+  stage1_high_enhancer_type: identity
+  use_aux_heads: false
+  mirfd:
+    high_enhancer_type: identity
+    block_fusion_high_source: selected_residual
+    use_context_residual_selector: true
+    selector_stages: [2]
+    selector_gamma_init: 0.1
+    selector_use_reference: false
+    gate_mode: none
+loss:
+  aux_weight: 0.0
+  selector_supervision_weight: 0.0 or 0.02
+  selector_supervision_stages: [2]
+  selector_target_dilate: 1
+```
+
+解释：
+
+1. 先只在 stage-2 使用 CGRS，因为 stage-1 residual 最干净，stage-3/4 更容易混入背景。
+2. 首轮关闭 FSRE/FFC，使用 `high_enhancer_type: identity`，避免把 high enhancer 的影响混进 selector 结论。
+3. `cgrs_unsupervised` 验证 low context 是否能无监督地帮助 residual selection。
+4. `cgrs_supervised` 使用轻量 selector BCE，验证 target-aware 约束是否能避免旧 gate 的背景放大问题。
+5. Reference-guided 版本暂不首轮启动，等 branch probe 和 CGRS without reference 的结果明确后再接 stage-1 reference。
+
+新增启动脚本：
+
+```text
+scripts/run_v2_5_branch_probe.sh
+scripts/run_v2_5_cgrs_experiments.sh
+```
+
+验证状态：
+
+```text
+python -m py_compile ... passed
+python tests/smoke_test.py passed
+v2.5 configs build ok
+```

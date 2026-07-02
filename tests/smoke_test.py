@@ -13,7 +13,13 @@ import torch.nn as nn
 
 from mirfd.losses import MIRFDLoss
 from mirfd.metrics import segmentation_metrics
-from mirfd.models import FFCFrequencyResidualEnhancer, FrequencySelectiveResidualEnhancer, MIRFDNet, build_model
+from mirfd.models import (
+    ContextGuidedResidualSelector,
+    FFCFrequencyResidualEnhancer,
+    FrequencySelectiveResidualEnhancer,
+    MIRFDNet,
+    build_model,
+)
 from mirfd.utils import load_config
 
 
@@ -137,6 +143,32 @@ def run_v2_config_smoke() -> None:
     ffc_outputs = ffc_model(x, return_features=True)
     assert ffc_outputs["logits"].shape == (2, 1, 64, 64)
     assert ffc_outputs["features"]["high_raw"][0].shape == ffc_outputs["features"]["residual"][0].shape
+
+    cgrs_cfg = deepcopy(residual_fusion_cfg)
+    cgrs_cfg["model"]["use_aux_heads"] = False
+    cgrs_cfg["model"]["mirfd"]["high_enhancer_type"] = "identity"
+    cgrs_cfg["model"]["mirfd"]["block_fusion_high_source"] = "selected_residual"
+    cgrs_cfg["model"]["mirfd"]["use_context_residual_selector"] = True
+    cgrs_cfg["model"]["mirfd"]["selector_stages"] = [2]
+    cgrs_cfg["model"]["mirfd"]["selector_gamma_init"] = 0.1
+    cgrs_cfg["loss"]["selector_supervision_weight"] = 0.02
+    cgrs_cfg["loss"]["selector_supervision_stages"] = [2]
+    cgrs_cfg["loss"]["selector_target_dilate"] = 1
+    cgrs_model = build_model(cgrs_cfg)
+    assert isinstance(cgrs_model.stage2.blocks[0].residual_selector, ContextGuidedResidualSelector)
+    assert cgrs_model.stage3.blocks[0].residual_selector is None
+    assert cgrs_model.stage4.blocks[0].residual_selector is None
+    cgrs_outputs = cgrs_model(x, return_features=True)
+    assert "selected_residual" in cgrs_outputs["features"]
+    assert "selector" in cgrs_outputs["features"]
+    assert torch.allclose(
+        cgrs_outputs["features"]["high_for_fusion"][0],
+        cgrs_outputs["features"]["selected_residual"][0],
+        atol=1e-6,
+    )
+    cgrs_loss, cgrs_details = MIRFDLoss(**cgrs_cfg["loss"])(cgrs_outputs, y)
+    cgrs_loss.backward()
+    assert "selector_aux" in cgrs_details
 
     criterion = MIRFDLoss(**cfg["loss"])
     loss, details = criterion(outputs, y)
